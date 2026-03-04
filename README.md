@@ -7,6 +7,9 @@
 <h3 align="center">Turn API limits into enforceable business policy.</h3>
 
 <p align="center">
+  Every API that charges per token, serves paying tenants, or runs agentic pipelines needs<br>
+  enforceable limits — not just rate-limit middleware bolted on as an afterthought.<br>
+  <br>
   Open-source edge enforcement engine for rate limits, quotas, and cost budgets.<br>
   Runs standalone or with a SaaS control plane for team governance.
 </p>
@@ -41,6 +44,31 @@ It is **not** a reverse proxy replacement. It is **not** a WAF. It is a dedicate
 - **Circuit breaker** — auto-trips on spend spikes, auto-resets after cooldown
 
 All controls are defined in one versioned policy bundle. Policies hot-reload without restarting the process.
+
+## Why not nginx / Kong / Envoy?
+
+If you have an existing gateway, the question is whether Fairvisor adds anything you can't get from the plugin ecosystem already installed. Here is the honest comparison:
+
+| Concern | nginx `limit_req` | Kong rate-limiting | Envoy global rate limit | Fairvisor Edge |
+|---|---|---|---|---|
+| Per-tenant limits (JWT claim) | No — IP/zone only | Partial — custom plugin | Yes, via descriptors | Yes — `jwt:org_id`, `jwt:plan`, any claim |
+| LLM token budgets (TPM/TPD) | No | No | No | Yes — pre-request reservation + post-response refund |
+| Cost budgets (cumulative $) | No | No | No | Yes |
+| Distributed state requirement | No (per-process) | Redis or Postgres | Separate rate limit service | No — in-process `ngx.shared.dict` |
+| Network round-trip in hot path | No | Yes (to Redis) | Yes (to rate limit service) | No |
+| Policy as versioned JSON | No | No (Admin API state) | Partial (Envoy config) | Yes — commit, diff, roll back |
+| Kill switches (instant, no restart) | No | No | No | Yes |
+| Loop detection for agents | No | No | No | Yes |
+
+**If nginx `limit_req` is enough for you**, use it. It has zero overhead and is the right tool for simple per-IP global throttling. Fairvisor becomes relevant when you need per-tenant awareness, JWT-claim-based bucketing, or cost/token tracking that `limit_req` has no model for.
+
+**If you are already running Kong**, the built-in rate limiting plugin stores counters in Redis or Postgres — every decision is a network call. Fairvisor can run alongside Kong as an `auth_request` decision service with no external state.
+
+**If you are running Envoy**, the [global rate limit service](https://github.com/envoyproxy/ratelimit) requires deploying a separate Redis-backed service with its own config language. Fairvisor is one container, one JSON file, and integrates via `ext_authz` in the same position.
+
+**If you are on Cloudflare or Akamai**, per-JWT-claim limits, LLM token budgets, and cost caps are not in the platform's model. If your limits are tenant-aware or cost-aware, you need something that runs in your own stack.
+
+Fairvisor integrates *alongside* Kong, nginx, and Envoy — it is not a replacement. See [docs/gateway-integration.md](docs/gateway-integration.md) for integration patterns.
 
 ## Quick start
 
@@ -153,6 +181,43 @@ RateLimit-Reset: 12
 ```
 
 Headers follow [RFC 9333 RateLimit Fields](https://www.rfc-editor.org/rfc/rfc9333). `X-Fairvisor-Reason` gives clients a machine-readable code for retry logic and observability.
+
+### Architecture
+
+**Decision service mode** (sidecar — your gateway calls `/v1/decision`, handles forwarding itself):
+
+```
+ Client ──► Your gateway (nginx / Envoy / Kong)
+                  │
+                  │  POST /v1/decision
+                  │  (auth_request / ext_authz)
+                  ▼
+          ┌─────────────────────┐
+          │   Fairvisor Edge    │
+          │  decision_service   │
+          │                     │
+          │  rule_engine        │
+          │  ngx.shared.dict    │  ◄── no Redis, no network
+          └──────────┬──────────┘
+                     │
+          204 allow  │  429 reject
+                     ▼
+          gateway proxies or returns rejection
+```
+
+**Reverse proxy mode** (inline — Fairvisor handles proxying):
+
+```
+ Client ──► Fairvisor Edge (reverse_proxy)
+                  │
+                  │  access.lua → rule_engine
+                  │  ngx.shared.dict
+                  │
+          allow ──► upstream service
+          reject ──► 429 + RFC 9333 headers
+```
+
+Both modes use the same policy bundle and produce the same rejection headers.
 
 ## Enforcement capabilities
 
