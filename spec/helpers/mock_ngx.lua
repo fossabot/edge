@@ -5,6 +5,10 @@ local string_sub = string.sub
 local string_find = string.find
 local table_concat = table.concat
 
+local bit
+local ok_bit, b = pcall(require, "bit")
+if ok_bit then bit = b end
+
 local _M = {}
 local string_byte = string.byte
 
@@ -106,7 +110,12 @@ local function _simple_digest(input)
   local h2 = 16777619
   for i = 1, #input do
     local b = string_byte(input, i)
-    h1 = (h1 ~ b) % 4294967296
+    if bit then
+      h1 = bit.bxor(h1, b) % 4294967296
+    else
+      -- Fallback if bit is not available (not cryptographically same, but avoids crash)
+      h1 = (h1 + b) % 4294967296
+    end
     h1 = (h1 * 16777619) % 4294967296
     h2 = (h2 + (b * i)) % 4294967296
   end
