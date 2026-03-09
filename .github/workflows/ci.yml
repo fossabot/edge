@@ -120,14 +120,14 @@ jobs:
 
       - name: Upload runtime SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4.32.5
+        uses: github/codeql-action/upload-sarif@v4.32.6
         with:
           sarif_file: artifacts/security/trivy-runtime.sarif
           category: trivy-runtime
 
       - name: Upload CLI SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4.32.5
+        uses: github/codeql-action/upload-sarif@v4.32.6
         with:
           sarif_file: artifacts/security/trivy-cli.sarif
           category: trivy-cli
