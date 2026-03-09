@@ -38,14 +38,14 @@ jobs:
 
       - name: Upload SARIF runtime
         if: always()
-        uses: github/codeql-action/upload-sarif@c793b717bc78562f491db7b0e93a3a178b099162  # v4.32.5
+        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98  # v4.32.6
         with:
           sarif_file: artifacts/security-nightly/runtime.sarif
           category: trivy-nightly-runtime
 
       - name: Upload SARIF cli
         if: always()
-        uses: github/codeql-action/upload-sarif@c793b717bc78562f491db7b0e93a3a178b099162  # v4.32.5
+        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98  # v4.32.6
         with:
           sarif_file: artifacts/security-nightly/cli.sarif
           category: trivy-nightly-cli
