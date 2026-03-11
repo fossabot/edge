@@ -20,6 +20,7 @@ local os_time = os.time
 
 local utils = require("fairvisor.utils")
 local json_lib = utils.get_json()
+local streaming = require("fairvisor.streaming")
 
 local _M = {}
 
@@ -27,6 +28,7 @@ local _deps = {
   bundle_loader = nil,
   rule_engine = nil,
   health = nil,
+  saas_client = nil,
 }
 
 local _config = {
@@ -129,12 +131,17 @@ local function _stable_jitter_ratio(seed)
     return 0
   end
 
-  local hash = 0
-  for i = 1, #seed do
-    hash = (hash * 131 + string_byte(seed, i)) % 1000003
+  if ngx and type(ngx.crc32_short) == "function" then
+    return ngx.crc32_short(seed) / 4294967296
   end
 
-  return hash / 1000003
+  -- Fallback rolling hash with a larger prime for better distribution
+  local hash = 0
+  for i = 1, #seed do
+    hash = (hash * 131 + string_byte(seed, i)) % 1048573
+  end
+
+  return hash / 1048573
 end
 
 local function _stable_identity_hash(value)
@@ -562,6 +569,33 @@ local function _normalize_boolish(value)
   return nil
 end
 
+local function _detect_provider(path)
+  if not path then return nil end
+  local p = string_lower(path)
+
+  -- Check segments for exact provider names
+  for segment in string_gmatch(p, "[^/]+") do
+    if segment == "openai" or segment == "azure" then return "openai" end
+    if segment == "anthropic" or segment == "claude" then return "anthropic" end
+    if segment == "google" or segment == "gemini" then return "gemini" end
+    if segment == "mistral" then return "mistral" end
+    if segment == "deepseek" then return "deepseek" end
+    if segment == "groq" then return "groq" end
+    if segment == "perplexity" then return "perplexity" end
+    if segment == "together" then return "together" end
+  end
+
+  -- Common OpenAI-compatible API patterns
+  if string_find(p, "/v1/chat/completions", 1, true) or
+     string_find(p, "/v1/completions", 1, true) or
+     string_find(p, "/v1/embeddings", 1, true) or
+     string_find(p, "/v1/images/generations", 1, true) then
+    return "openai_compatible"
+  end
+
+  return nil
+end
+
 function _M.build_request_context(bundle)
   local raw_headers = ngx.req.get_headers()
   -- Build a copy with both underscore and hyphen forms so descriptor extract finds headers
@@ -609,6 +643,7 @@ function _M.build_request_context(bundle)
     ip_type = _safe_var("fairvisor_asn_type") or _first_header(headers, "X-ASN-Type"),
     ip_tor = _normalize_boolish(_first_header(headers, "X-Tor-Exit")) or _normalize_boolish(_safe_var("is_tor_exit")),
     user_agent = needs_user_agent and _first_header(headers, "User-Agent") or nil,
+    provider = _detect_provider(path),
   }
 end
 
@@ -719,6 +754,7 @@ function _M.init(deps)
   _deps.bundle_loader = deps.bundle_loader
   _deps.rule_engine = deps.rule_engine
   _deps.health = deps.health
+  _deps.saas_client = deps.saas_client
 
   if not deps.health or type(deps.health.inc) ~= "function" then
     _log_warn("init health not provided or health.inc missing; decision metrics disabled")
@@ -816,6 +852,22 @@ function _M.access_handler()
     end
   end
 
+  if decision.action == "allow" then
+    local limit_result = decision.limit_result
+    if limit_result and (limit_result.reserved or limit_result.estimated_total) then
+      local reservation = {
+        key = decision.limit_result.key or (decision.policy_id .. ":" .. decision.rule_name),
+        estimated_total = limit_result.reserved or limit_result.estimated_total,
+        prompt_tokens = limit_result.prompt_tokens or 0,
+        is_shadow = decision.mode == "shadow",
+        subject_id = decision.debug_descriptors and (decision.debug_descriptors["jwt:org_id"] or decision.debug_descriptors["jwt:sub"]),
+        provider = request_context.provider,
+        saas_client = _deps.saas_client,
+      }
+      streaming.init_stream(bundle.defaults or {}, request_context, reservation)
+    end
+  end
+
   if decision.headers then
     _inject_debug_headers(decision.headers, decision)
     if _is_decision_service_mode() then
@@ -905,6 +957,18 @@ function _M.header_filter_handler()
 end
 
 function _M.log_handler()
+  local status = ngx.status
+  if status >= 400 and status ~= HTTP_TOO_MANY_REQUESTS then
+    if _deps.saas_client and type(_deps.saas_client.queue_event) == "function" then
+      _deps.saas_client.queue_event({
+        event_type = "upstream_error_forwarded",
+        upstream_status = status,
+        route = ngx.var.uri,
+        method = ngx.var.request_method,
+        upstream_host = ngx.var.upstream_addr,
+      })
+    end
+  end
   return nil
 end
 

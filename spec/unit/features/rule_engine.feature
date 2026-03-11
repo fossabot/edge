@@ -131,3 +131,18 @@ Feature: Rule evaluation engine orchestration
       Then decision action is "allow"
       And kill switch check was skipped
       And decision does not expose override headers
+
+  Rule: Audit event emission
+    Scenario: Decision events are emitted for every evaluation
+      Given the rule engine test environment is reset
+      And fixture AC-1 all must pass with second policy rejection
+      When I evaluate the request
+      Then an audit event of type "limit_reached" was queued
+      And the decision audit event includes action "reject" and reason "rate_limited"
+
+    Scenario: Shadow mode audit events include original action
+      Given the rule engine test environment is reset
+      And fixture AC-7 shadow mode wraps reject as allow
+      When I evaluate the request
+      Then an audit event of type "limit_reached" was queued
+      And the shadow decision audit event includes action "reject" and shadow true

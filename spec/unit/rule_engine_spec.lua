@@ -58,6 +58,7 @@ local function _setup_engine(ctx)
   ctx.logs = {}
   ctx.metrics = {}
   ctx.rule_results = {}
+  ctx.queued_events = {}
   ctx.kill_switch_matched = false
   ctx.loop_detected = false
   ctx.loop_action = "reject"
@@ -218,6 +219,7 @@ local function _setup_engine(ctx)
       return policy and policy.spec and policy.spec.mode == "shadow" or false
     end,
     wrap = function(decision, mode)
+      decision.original_action = decision.action
       decision.mode = mode or "shadow"
       decision.would_reject = decision.action == "reject"
       decision.action = "allow"
@@ -254,6 +256,13 @@ local function _setup_engine(ctx)
     end,
   }
 
+  local saas_client = {
+    queue_event = function(event)
+      ctx.queued_events[#ctx.queued_events + 1] = event
+      return true
+    end
+  }
+
   package.loaded["fairvisor.rule_engine"] = nil
   package.loaded["fairvisor.descriptor"] = nil
   package.loaded["fairvisor.token_bucket"] = nil
@@ -274,7 +283,7 @@ local function _setup_engine(ctx)
   package.preload["fairvisor.llm_limiter"] = function() return llm_limiter end
 
   ctx.engine = require("fairvisor.rule_engine")
-  ctx.engine.init({ dict = ctx.dict, health = health })
+  ctx.engine.init({ dict = ctx.dict, health = health, saas_client = saas_client })
 end
 
 runner:given("^the rule engine test environment is reset$", function(ctx)
@@ -763,6 +772,48 @@ runner:then_('^route matching received host "([^"]+)" method "([^"]+)" and path 
   assert.equals(host, ctx.route_match_args.host)
   assert.equals(method, ctx.route_match_args.method)
   assert.equals(path, ctx.route_match_args.path)
+end)
+
+runner:then_("^an audit event of type \"([^\"]+)\" was queued$", function(ctx, event_type)
+  local found = false
+  for i = 1, #ctx.queued_events do
+    if ctx.queued_events[i].event_type == event_type or ctx.queued_events[i].type == event_type then
+      found = true
+      break
+    end
+  end
+  assert.is_true(found)
+end)
+
+runner:then_("^the decision audit event includes action \"([^\"]+)\" and reason \"([^\"]+)\"$", function(ctx, action, reason)
+  local event = nil
+  for i = 1, #ctx.queued_events do
+    local e = ctx.queued_events[i]
+    if e.event_type == "limit_reached" or e.event_type == "request_rejected" or
+       e.event_type == "request_throttled" or e.type == "decision" then
+      event = e
+      break
+    end
+  end
+  assert.is_not_nil(event)
+  local dec = event.decision or (event.decision and event.decision.action)
+  assert.equals(action, dec)
+  local reas = event.reason_code or (event.decision and event.decision.reason)
+  assert.equals(reason, reas)
+end)
+
+runner:then_("^the shadow decision audit event includes action \"([^\"]+)\" and shadow true$", function(ctx, action)
+  local event = nil
+  for i = 1, #ctx.queued_events do
+    local e = ctx.queued_events[i]
+    if e.event_type == "limit_reached" or e.event_type == "request_rejected" or e.event_type == "request_throttled" then
+      event = e
+      break
+    end
+  end
+  assert.is_not_nil(event)
+  assert.equals(action, event.decision)
+  assert.is_true(event.shadow)
 end)
 
 runner:feature_file_relative("features/rule_engine.feature")

@@ -455,6 +455,7 @@ function _M.reconcile(dict, key, config, estimated_total, actual_total, now)
   _reconcile_result.refunded = unused
   _reconcile_result.actual = actual
   _reconcile_result.estimated = estimated
+
   return _reconcile_result
 end
 

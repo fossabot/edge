@@ -60,6 +60,15 @@ runner:given("^the nginx mock environment is reset$", function(ctx)
   ctx.dict = env.dict
   ctx.time = env.time
   ctx.key = "org:tenant-1:model:gpt-4"
+  ctx.queued_events = {}
+
+  local saas_client = {
+    queue_event = function(event)
+      ctx.queued_events[#ctx.queued_events + 1] = event
+      return true
+    end
+  }
+  package.loaded["fairvisor.saas_client"] = saas_client
 end)
 
 runner:given("^a valid llm limiter config with tokens_per_minute (%d+)$", function(ctx, tpm)

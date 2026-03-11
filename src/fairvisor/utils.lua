@@ -11,6 +11,7 @@ local pcall = pcall
 local string_byte = string.byte
 local string_char = string.char
 local string_find = string.find
+local string_format = string.format
 local string_match = string.match
 local string_gsub = string.gsub
 local string_sub = string.sub
@@ -125,6 +126,36 @@ function _M.encode_base64(raw)
     return ngx.encode_base64(raw)
   end
   return nil
+end
+
+--- Convert raw bytes to hex string.
+function _M.to_hex(input)
+  if type(input) ~= "string" then
+    return nil
+  end
+  return (string_gsub(input, ".", function(c)
+    return string_format("%02x", string_byte(c))
+  end))
+end
+
+--- SHA-256 digest (binary). Uses ngx.sha256_bin if available.
+function _M.sha256(input)
+  if not input then
+    return nil
+  end
+  if ngx and ngx.sha256_bin then
+    return ngx.sha256_bin(input)
+  end
+  -- Fallback to resty.sha256 if available
+  local ok, resty_sha256 = pcall(require, "resty.sha256")
+  if ok and resty_sha256 then
+    local sha = resty_sha256:new()
+    sha:update(input)
+    return sha:final()
+  end
+  -- Final fallback: if we are in a test env without ngx/resty, we might need a placeholder
+  -- or a way to fail gracefully. For MVP, we'll return nil and log a warning if possible.
+  return nil, "sha256_unavailable"
 end
 
 -- Inlined JSON encoder/decoder (no unicode escapes in strings).

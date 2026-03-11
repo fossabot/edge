@@ -79,6 +79,10 @@ http {
 
       header_filter_by_lua_file /opt/fairvisor/src/nginx/header_filter.lua;
 
+      body_filter_by_lua_file /opt/fairvisor/src/nginx/body_filter.lua;
+
+      log_by_lua_file /opt/fairvisor/src/nginx/log.lua;
+
       if ($fairvisor_mode = reverse_proxy) {
         proxy_pass $fairvisor_backend;
         break;

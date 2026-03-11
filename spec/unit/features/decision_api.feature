@@ -138,7 +138,7 @@ Feature: Decision API unit behavior
       Given the decision api dependencies are initialized
       And the mode is "decision_service"
       And the rule engine decision is reject with reason "rate_limit_exceeded" and retry_after 10
-      When I run the access handler for clients "10.0.0.1" and "10.0.1.1"
+      When I run the access handler for clients "10.0.0.1" and "10.0.0.2"
       Then retry after headers are different
       And the test cleanup restores globals
 

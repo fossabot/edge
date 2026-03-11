@@ -61,8 +61,24 @@ if not init_ok then
 end
 
 local bundle_loader = require("fairvisor.bundle_loader")
+bundle_loader.init({ saas_client = saas_client })
+
+if saas_client and not env_config.is_standalone(config) then
+  local ok, err = saas_client.init(config, {
+    bundle_loader = bundle_loader,
+    health = health
+  })
+  if not ok then
+    ngx.log(ngx.ERR, "fairvisor module=init_worker saas_client_init_failed err=", err)
+  end
+end
+
 local rule_engine = require("fairvisor.rule_engine")
-local re_ok, re_err = rule_engine.init({ dict = ngx.shared.fairvisor_counters, health = health })
+local re_ok, re_err = rule_engine.init({
+  dict = ngx.shared.fairvisor_counters,
+  health = health,
+  saas_client = saas_client
+})
 if not re_ok then
   ngx.log(ngx.ERR, "fairvisor module=init_worker rule_engine_init_failed err=", re_err)
 else
@@ -72,6 +88,7 @@ else
     rule_engine = rule_engine,
     health = health,
     config = config,
+    saas_client = saas_client,
   })
   if not da_ok then
     ngx.log(ngx.ERR, "fairvisor module=init_worker decision_api_init_failed err=", da_err)

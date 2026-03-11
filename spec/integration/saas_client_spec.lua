@@ -193,14 +193,15 @@ runner:then_("^CT%-002 config contract applies bundle and sends ack$", function(
 end)
 
 runner:then_("^CT%-003 events contract sends idempotent batch delivery$", function(ctx)
-  assert.equals(1, ctx.flushed)
+  -- 2 events: edge_started (from init) + kind=decision (from test)
+  assert.equals(2, ctx.flushed)
 
   local found = false
   for _, request in ipairs(ctx.http.requests) do
     if request.url == ctx.config.saas_url .. "/api/v1/edge/events" then
       found = true
       assert.equals("edge-int-1", request.body.edge_id)
-      assert.equals(1, #request.body.events)
+      assert.equals(2, #request.body.events)
       assert.is_not_nil(request.headers["Idempotency-Key"])
     end
   end

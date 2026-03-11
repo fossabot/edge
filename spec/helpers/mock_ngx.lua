@@ -228,6 +228,9 @@ function _M.setup_ngx()
     sha1_bin = function(payload)
       return _simple_digest("sha1bin:" .. payload)
     end,
+    sha256_bin = function(payload)
+      return _simple_digest("sha256bin:" .. payload)
+    end,
     encode_base64 = function(value)
       return _to_base64(value)
     end,

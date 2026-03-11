@@ -4,6 +4,8 @@ local abs = math.abs
 local random = math.random
 local type = type
 local table_remove = table.remove
+local table_concat = table.concat
+local os_date = os.date
 
 local utils = require("fairvisor.utils")
 local json_lib = utils.get_json()
@@ -43,6 +45,7 @@ local _state = {
   deps = nil,
   start_time = 0,
   event_buffer = {},
+  coalesce_buffer = {}, -- signature -> event_data
   consecutive_failures = 0,
   half_open_successes = 0,
   circuit_state = STATE_CLOSED,
@@ -60,6 +63,49 @@ local _state = {
   register_next_retry_at = 0,
   last_config_poll_at = 0,
 }
+
+local function _build_signature(event)
+  local et = event.event_type
+  if et == "request_rejected" or et == "limit_reached" or et == "budget_exhausted" or et == "request_throttled" then
+    return table_concat({
+      et,
+      event.subject_id_hash or "",
+      event.route or "",
+      event.reason_code or "",
+      tostring(event.status_code or ""),
+      event.limit_name or ""
+    }, ":")
+  end
+  if et == "upstream_error_forwarded" then
+    return table_concat({
+      et,
+      event.route or "",
+      event.upstream_status or "",
+      event.upstream_host or ""
+    }, ":")
+  end
+  return nil
+end
+
+local function _flush_coalesced_to_buffer()
+  local now = ngx.now()
+  for _, data in pairs(_state.coalesce_buffer) do
+    if data.repeated_count > 0 then
+      local base = data.base_event
+      -- Create a summary event based on the first occurrence
+      local event = {}
+      for k, v in pairs(base) do
+        event[k] = v
+      end
+      event.repeated_count = data.repeated_count
+      event.window_sec = floor(now - data.first_seen_at)
+      event.ts = os_date("!%Y-%m-%dT%H:%M:%SZ", floor(now))
+      -- Add to buffer
+      _state.event_buffer[#_state.event_buffer + 1] = event
+    end
+  end
+  _state.coalesce_buffer = {}
+end
 
 local function _http_client()
   if _state.deps and _state.deps.http_client then
@@ -146,6 +192,7 @@ local function _inc_saas_call(operation, status)
 end
 
 local function _record_failure()
+  local prev_state = _state.circuit_state
   _state.consecutive_failures = _state.consecutive_failures + 1
   _state.half_open_successes = 0
 
@@ -154,15 +201,28 @@ local function _record_failure()
     _state.opened_at = ngx.now()
     _set_reachable(0)
     _log_warn("_record_failure msg=saas_circuit_open details=", _state.consecutive_failures)
+    _M.queue_event({
+      event_type = "saas_circuit_state_changed",
+      prev_state = prev_state,
+      new_state = STATE_OPEN,
+      reason = "consecutive_failures_" .. _state.consecutive_failures
+    })
   elseif _state.circuit_state == STATE_HALF_OPEN then
     _state.circuit_state = STATE_OPEN
     _state.opened_at = ngx.now()
     _set_reachable(0)
     _log_warn("_record_failure msg=saas_circuit_reopened details=", _state.consecutive_failures)
+    _M.queue_event({
+      event_type = "saas_circuit_state_changed",
+      prev_state = prev_state,
+      new_state = STATE_OPEN,
+      reason = "half_open_failure"
+    })
   end
 end
 
 local function _record_success()
+  local prev_state = _state.circuit_state
   if _state.circuit_state == STATE_HALF_OPEN then
     _state.half_open_successes = _state.half_open_successes + 1
     if _state.half_open_successes >= CIRCUIT_CLOSE_AFTER_HALF_OPEN_SUCCESSES then
@@ -170,6 +230,12 @@ local function _record_success()
       _state.consecutive_failures = 0
       _state.half_open_successes = 0
       _set_reachable(1)
+      _M.queue_event({
+        event_type = "saas_circuit_state_changed",
+        prev_state = prev_state,
+        new_state = STATE_CLOSED,
+        reason = "half_open_success_threshold"
+      })
     end
     return
   end
@@ -595,6 +661,7 @@ local function _flush_once()
 end
 
 local function _event_flush_tick()
+  _flush_coalesced_to_buffer()
   _flush_once()
 end
 
@@ -604,6 +671,7 @@ local function _reset_state(config, deps)
   _state.deps = deps
   _state.start_time = ngx.now()
   _state.event_buffer = {}
+  _state.coalesce_buffer = {}
   _state.consecutive_failures = 0
   _state.half_open_successes = 0
   _state.circuit_state = STATE_CLOSED
@@ -717,6 +785,12 @@ function _M.init(config, deps)
 
   _state.initialized = true
 
+  _M.queue_event({
+    event_type = "edge_started",
+    edge_version = EDGE_VERSION,
+    gateway_mode = os.getenv("FAIRVISOR_MODE") or "decision_service"
+  })
+
   if ngx.timer and ngx.timer.every then
     ngx.timer.every(config.heartbeat_interval, function(premature)
       if premature then
@@ -736,24 +810,78 @@ function _M.init(config, deps)
   return true
 end
 
+local function _queue_event_internal(event)
+  if #_state.event_buffer >= _state.config.max_buffer_size then
+    table_remove(_state.event_buffer, 1)
+    _log_warn("queue_event event_buffer_overflow_drop_oldest ", #_state.event_buffer)
+    if _state.deps and _state.deps.health and _state.deps.health.inc then
+      _state.deps.health:inc("fairvisor_audit_events_dropped_total", {}, 1)
+    end
+  end
+
+  _state.event_buffer[#_state.event_buffer + 1] = event
+
+  if _state.deps and _state.deps.health and _state.deps.health.inc then
+    _state.deps.health:inc("fairvisor_audit_events_emitted_total", { event_type = event.event_type }, 1)
+  end
+  return true
+end
+
 function _M.queue_event(event)
   if not _state.initialized then
     return nil, "saas_client is not initialized"
   end
 
-  if #_state.event_buffer >= _state.config.max_buffer_size then
-    table_remove(_state.event_buffer, 1)
-    _log_warn("queue_event event_buffer_overflow_drop_oldest ", #_state.event_buffer)
+  if type(event) ~= "table" then
+    return nil, "event must be a table"
   end
 
-  _state.event_buffer[#_state.event_buffer + 1] = event
-  return true
+  local now = ngx.now()
+  event.ts = event.ts or os_date("!%Y-%m-%dT%H:%M:%SZ", floor(now))
+  event.edge_instance_id = event.edge_instance_id or _state.config.edge_id
+  event.request_id = event.request_id or (ngx and ngx.var and ngx.var.request_id)
+
+  -- Subject Hashing
+  if event.subject_id and not event.subject_id_hash then
+    local raw_hash, err = utils.sha256(event.subject_id)
+    if raw_hash then
+      event.subject_id_hash = utils.to_hex(raw_hash)
+    else
+      _log_warn("saas_client subject_hashing_failed err=", tostring(err))
+      event.subject_id_hash = "hashing_failed"
+    end
+    -- Always remove raw subject_id for security
+    event.subject_id = nil
+  end
+
+  -- Coalescing
+  local signature = _build_signature(event)
+  if signature then
+    local coalesced = _state.coalesce_buffer[signature]
+    if not coalesced then
+      -- First time seeing this in current window: emit immediately
+      _state.coalesce_buffer[signature] = {
+        repeated_count = 0,
+        first_seen_at = now,
+        base_event = event
+      }
+      return _queue_event_internal(event)
+    else
+      -- Subsequent occurrence: just increment counter
+      coalesced.repeated_count = coalesced.repeated_count + 1
+      return true
+    end
+  end
+
+  return _queue_event_internal(event)
 end
 
 function _M.flush_events()
   if not _state.initialized then
     return 0
   end
+
+  _flush_coalesced_to_buffer()
 
   local flushed = 0
   while #_state.event_buffer > 0 do

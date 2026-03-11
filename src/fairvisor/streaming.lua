@@ -209,6 +209,25 @@ local function _log_would_truncate(ctx)
     " max_completion_tokens=", tostring(ctx.max_completion_tokens))
 end
 
+local function _maybe_emit_cutoff_event(ctx)
+  local saas_client = ctx.saas_client
+  if saas_client and type(saas_client.queue_event) == "function" then
+    saas_client.queue_event({
+      event_type = "stream_cutoff",
+      subject_id = ctx.subject_id,
+      route = ctx.route,
+      method = ctx.method,
+      provider = ctx.provider,
+      decision = "cutoff",
+      reason_code = "budget_exceeded",
+      tokens_used = ctx.tokens_used,
+      tokens_limit = ctx.max_completion_tokens,
+      is_streaming = true,
+      shadow = ctx.is_shadow,
+    })
+  end
+end
+
 function _M.is_streaming(request_context)
   if type(request_context) ~= "table" then
     return false
@@ -251,6 +270,11 @@ function _M.init_stream(config, request_context, reservation)
     done = false,
     truncated = false,
     reconciled = false,
+    subject_id = reservation and reservation.subject_id,
+    route = request_context and request_context.path,
+    method = request_context and request_context.method,
+    provider = reservation and reservation.provider,
+    saas_client = reservation and reservation.saas_client,
   }
 
   ngx.ctx = ngx.ctx or {}
@@ -306,10 +330,15 @@ function _M.body_filter(chunk, eof)
 
       if stream_ctx.tokens_used > stream_ctx.max_completion_tokens then
         if stream_ctx.is_shadow then
-          _log_would_truncate(stream_ctx)
+          if not stream_ctx.cutoff_event_emitted then
+            _log_would_truncate(stream_ctx)
+            _maybe_emit_cutoff_event(stream_ctx)
+            stream_ctx.cutoff_event_emitted = true
+          end
         else
           stream_ctx.truncated = true
           _reconcile_once(stream_ctx)
+          _maybe_emit_cutoff_event(stream_ctx)
           return _build_termination(stream_ctx)
         end
       end

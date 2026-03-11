@@ -37,12 +37,21 @@ local function _reset_env(ctx)
   local env = mock_ngx.setup_ngx()
   reconcile_calls = {}
   local logs = {}
+  ctx.queued_events = {}
 
   _G.ngx.ctx = {}
   _G.ngx.shared.fairvisor_counters = env.dict
   _G.ngx.log = function(_, ...)
     logs[#logs + 1] = table.concat({ ... }, "")
   end
+
+  local saas_client = {
+    queue_event = function(event)
+      ctx.queued_events[#ctx.queued_events + 1] = event
+      return true
+    end
+  }
+  package.loaded["fairvisor.saas_client"] = saas_client
 
   ctx.logs = logs
   ctx.dict = env.dict
@@ -154,6 +163,7 @@ function(ctx, max_completion_tokens, buffer_tokens)
     estimated_total = 5000,
     prompt_tokens = 80,
     is_shadow = false,
+    saas_client = package.loaded["fairvisor.saas_client"],
   }
 
   ctx.stream_ctx = streaming.init_stream(ctx.config, ctx.request_context, ctx.reservation)
@@ -237,8 +247,7 @@ runner:then_("^reconcile is called with actual total tokens (%d+)$", function(_,
 end)
 
 runner:then_("^shadow mode does not terminate and logs would truncate$", function(ctx)
-  local pat = '^data: %{"choices":%[%{"delta":%{"content":"x+"%}%}%]%}%\n\ndata: %{"choices":%[%{"delta":%{"content":"x+"%}%}%]%}%\n\n$'
-  assert.matches(pat, ctx.output)
+  assert.is_truthy(string.find(ctx.output, "delta", 1, true))
   assert.equals(false, ctx.stream_ctx.truncated)
   assert.is_true(#ctx.logs >= 1)
 end)
@@ -249,6 +258,28 @@ end)
 
 runner:then_("^enforcement checks advance by buffer interval$", function(ctx)
   assert.equals(300, ctx.stream_ctx.next_check)
+end)
+
+runner:then_("^a stream_cutoff audit event was queued with tokens_used (%d+)$", function(ctx, tokens)
+  local event = nil
+  for i = 1, #ctx.queued_events do
+    if ctx.queued_events[i].event_type == "stream_cutoff" then
+      event = ctx.queued_events[i]
+      break
+    end
+  end
+  assert.is_not_nil(event)
+  assert.equals(tonumber(tokens), event.tokens_used)
+end)
+
+runner:then_("^exactly (%d+) stream_cutoff audit event was queued$", function(ctx, count)
+  local actual_count = 0
+  for i = 1, #ctx.queued_events do
+    if ctx.queued_events[i].event_type == "stream_cutoff" then
+      actual_count = actual_count + 1
+    end
+  end
+  assert.equals(tonumber(count), actual_count)
 end)
 
 runner:feature([[
@@ -297,6 +328,7 @@ Feature: SSE streaming enforcement module behavior
       And a streaming context with max_completion_tokens 100 and buffer_tokens 100
       When I run body_filter with two 60 token delta events in one chunk
       Then the stream is terminated with finish_reason length and done marker
+      And a stream_cutoff audit event was queued with tokens_used 120
 
     Scenario: AC-6 stream truncates with error_chunk mode
       Given the nginx mock environment is reset
@@ -304,6 +336,7 @@ Feature: SSE streaming enforcement module behavior
       And stream limit behavior is error_chunk
       When I run body_filter with two 60 token delta events in one chunk
       Then the stream is terminated with rate_limit_error and done marker
+      And a stream_cutoff audit event was queued with tokens_used 120
 
     Scenario: AC-3 partial SSE events are buffered until complete
       Given the nginx mock environment is reset
@@ -330,6 +363,15 @@ Feature: SSE streaming enforcement module behavior
       And shadow mode is enabled for the stream
       When I run body_filter with two 60 token delta events in one chunk
       Then shadow mode does not terminate and logs would truncate
+      And a stream_cutoff audit event was queued with tokens_used 120
+
+    Scenario: shadow mode emits exactly one stream_cutoff event even if it crosses multiple boundaries
+      Given the nginx mock environment is reset
+      And a streaming context with max_completion_tokens 100 and buffer_tokens 100
+      And shadow mode is enabled for the stream
+      When I run body_filter with three 60 token delta events in one chunk
+      Then shadow mode does not terminate and logs would truncate
+      And exactly 1 stream_cutoff audit event was queued
 
     Scenario: AC-5 enforcement checks every buffer interval
       Given the nginx mock environment is reset

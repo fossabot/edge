@@ -21,8 +21,24 @@ local json_lib = utils.get_json()
 local DEFAULT_HOT_RELOAD_INTERVAL = 5
 
 local _current_bundle
+local _deps = {
+  saas_client = nil
+}
 
 local _M = {}
+
+function _M.init(deps)
+  if type(deps) == "table" then
+    _deps.saas_client = deps.saas_client
+  end
+  return true
+end
+
+local function _queue_audit_event(event)
+  if _deps.saas_client and type(_deps.saas_client.queue_event) == "function" then
+    _deps.saas_client.queue_event(event)
+  end
+end
 
 local function _contains_ua_descriptor_key(key)
   if type(key) ~= "string" then
@@ -497,16 +513,28 @@ function _M.load_from_string(json_string, signing_key, current_version)
   if signing_key then
     local signature, split_payload, split_err = _split_signed_bundle(json_string)
     if not signature then
+      _queue_audit_event({
+        event_type = "bundle_rejected",
+        rejection_reason = split_err
+      })
       return nil, split_err
     end
 
     local expected_raw, hmac_err = _compute_hmac_sha256(signing_key, split_payload)
     if not expected_raw then
+      _queue_audit_event({
+        event_type = "bundle_rejected",
+        rejection_reason = hmac_err
+      })
       return nil, hmac_err
     end
 
     local expected_signature = _encode_signature(expected_raw)
     if not utils.constant_time_equals(expected_signature, signature) then
+      _queue_audit_event({
+        event_type = "bundle_rejected",
+        rejection_reason = "invalid_signature"
+      })
       return nil, "invalid_signature"
     end
 
@@ -515,15 +543,29 @@ function _M.load_from_string(json_string, signing_key, current_version)
 
   local bundle, decode_err = _json_decode(payload)
   if not bundle then
+    _queue_audit_event({
+      event_type = "bundle_rejected",
+      rejection_reason = decode_err
+    })
     return nil, decode_err
   end
 
   local top_ok, top_err = _validate_top_level(bundle)
   if not top_ok then
+    _queue_audit_event({
+      event_type = "bundle_rejected",
+      bundle_version = bundle and bundle.bundle_version or nil,
+      rejection_reason = top_err
+    })
     return nil, top_err
   end
 
   if current_version ~= nil and bundle.bundle_version <= current_version then
+    _queue_audit_event({
+      event_type = "bundle_rejected",
+      bundle_version = bundle.bundle_version,
+      rejection_reason = "version_not_monotonic"
+    })
     return nil, "version_not_monotonic"
   end
 
@@ -557,6 +599,7 @@ function _M.load_from_string(json_string, signing_key, current_version)
 
   return {
     version = bundle.bundle_version,
+    bundle_id = bundle.bundle_id,
     hash = hash,
     policies = valid_policies,
     policies_by_id = policies_by_id,
@@ -601,6 +644,12 @@ function _M.apply(compiled)
 
   _current_bundle = compiled
   health.set_bundle_state(compiled.version, compiled.hash, compiled.loaded_at)
+
+  _queue_audit_event({
+    event_type = "bundle_activated",
+    bundle_version = compiled.version,
+    bundle_id = compiled.bundle_id or ("bundle-" .. tostring(compiled.version))
+  })
 
   return true
 end

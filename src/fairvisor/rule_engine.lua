@@ -17,6 +17,7 @@ end
 
 local _dict = nil
 local _health = nil
+local _saas = nil
 
 local _descriptor = nil
 local _token_bucket = nil
@@ -401,6 +402,7 @@ local function _build_decision(action, reason, extra)
 end
 
 local function _wrap_shadow(decision)
+  decision.original_action = decision.action
   if _shadow_mode and type(_shadow_mode.wrap) == "function" then
     return _shadow_mode.wrap(decision, "shadow")
   end
@@ -471,7 +473,7 @@ local function _maybe_log_override_state(flags)
   end
 end
 
-local function _finalize_decision(decision, start_time, flags, request_context)
+local function _finalize_decision(decision, start_time, flags, request_context, descriptors)
   flags = flags or {}
   local latency_us = floor((ngx.now() - start_time) * 1000000)
   decision.latency_us = latency_us
@@ -496,6 +498,65 @@ local function _finalize_decision(decision, start_time, flags, request_context)
   _set_metric("fairvisor_kill_switch_active", {
     scope = "request",
   }, decision.reason == "kill_switch" and 1 or 0)
+
+  if _saas and type(_saas.queue_event) == "function" then
+    local limit_result = decision.limit_result or {}
+    local subject_id = nil
+    if descriptors then
+      subject_id = descriptors["jwt:org_id"] or descriptors["jwt:sub"] or descriptors["header:x-api-key"]
+    end
+
+    -- 1. Handle budget_warning (can be emitted for allowed/throttled requests)
+    if limit_result.warning then
+      _saas.queue_event({
+        event_type = "budget_warning",
+        subject_id = subject_id,
+        route = request_context and request_context.path,
+        method = request_context and request_context.method,
+        limit_name = decision.rule_name,
+        limit_value = limit_result.limit or (limit_result.budget_remaining and
+          (limit_result.budget_remaining / (1 - (limit_result.usage_percent/100)))),
+        current_usage = limit_result.current or (limit_result.usage_percent and
+          (limit_result.usage_percent * (limit_result.limit or 0) / 100)),
+        threshold_pct = limit_result.usage_percent,
+        shadow = decision.mode == "shadow",
+      })
+    end
+
+    -- 2. Map main decision event
+    local effective_action = decision.original_action or decision.action
+    local event_type = "request_rejected"
+    if effective_action == "throttle" then
+      event_type = "request_throttled"
+    elseif effective_action == "reject" then
+      if decision.reason == "rate_limit_exceeded" or decision.reason == "tpm_exceeded" or decision.reason == "rate_limited" then
+        event_type = "limit_reached"
+      elseif decision.reason == "budget_exceeded" or decision.reason == "tpd_exceeded" then
+        event_type = "budget_exhausted"
+      end
+    else
+      -- Allowed requests without warnings are not audited individually
+      return decision
+    end
+
+    _saas.queue_event({
+      event_type = event_type,
+      subject_id = subject_id,
+      route = request_context and request_context.path,
+      method = request_context and request_context.method,
+      decision = effective_action,
+      reason_code = decision.reason,
+      status_code = (effective_action == "reject") and 429 or 200,
+      limit_name = decision.rule_name,
+      limit_value = limit_result.limit or limit_result.budget,
+      current_usage = limit_result.current or limit_result.reserved or
+        (limit_result.usage_percent and (limit_result.usage_percent * (limit_result.limit or 0) / 100)),
+      retry_after = decision.headers and decision.headers["Retry-After"],
+      shadow = decision.mode == "shadow",
+      delay_ms = decision.delay_ms,
+    })
+  end
+
   return decision
 end
 
@@ -506,6 +567,7 @@ function _M.init(deps)
   -- Explicit: use deps.dict when provided, otherwise ngx.shared.fairvisor_counters. evaluate() does not reassign.
   _dict = deps.dict or (ngx and ngx.shared and ngx.shared.fairvisor_counters)
   _health = deps.health
+  _saas = deps.saas_client
 
   return true
 end
@@ -561,7 +623,7 @@ function _M.evaluate(request_context, bundle)
       return _finalize_decision(_build_decision("reject", "kill_switch", {
         retry_after = 3600,
         kill_switch = ks_result,
-      }), start_time, runtime_flags, request_context)
+      }), start_time, runtime_flags, request_context, ks_descriptors)
     end
   else
     _inc_metric("fairvisor_kill_switch_override_skips_total", 1, {})
@@ -655,7 +717,7 @@ function _M.evaluate(request_context, bundle)
           if is_shadow then
             loop_decision = _wrap_shadow(loop_decision)
           end
-          return _finalize_decision(loop_decision, start_time, runtime_flags, request_context)
+          return _finalize_decision(loop_decision, start_time, runtime_flags, request_context, descriptors)
         end
       end
 
@@ -680,7 +742,7 @@ function _M.evaluate(request_context, bundle)
           if is_shadow then
             decision = _wrap_shadow(decision)
           end
-          return _finalize_decision(decision, start_time, runtime_flags, request_context)
+          return _finalize_decision(decision, start_time, runtime_flags, request_context, descriptors)
         end
       end
 
@@ -739,7 +801,7 @@ function _M.evaluate(request_context, bundle)
               decision = _wrap_shadow(decision)
             end
 
-            return _finalize_decision(decision, start_time, runtime_flags, request_context)
+            return _finalize_decision(decision, start_time, runtime_flags, request_context, descriptors)
           end
 
           if limit_result and limit_result.allowed ~= false then
@@ -814,7 +876,7 @@ function _M.evaluate(request_context, bundle)
       matched_policy_count = matched_count,
       debug_descriptors = pending_non_reject.descriptors,
     })
-    return _finalize_decision(pending, start_time, runtime_flags, request_context)
+    return _finalize_decision(pending, start_time, runtime_flags, request_context, pending_non_reject.descriptors)
   end
 
   return _finalize_decision(_build_decision("allow", "all_rules_passed", {
@@ -822,7 +884,7 @@ function _M.evaluate(request_context, bundle)
     policy_id = last_allow_policy_id,
     matched_policy_count = matched_count,
     debug_descriptors = last_allow_descriptors,
-  }), start_time, runtime_flags, request_context)
+  }), start_time, runtime_flags, request_context, last_allow_descriptors)
 end
 
 return _M
