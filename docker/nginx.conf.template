@@ -24,6 +24,7 @@ worker_shutdown_timeout 35s;
 http {
   resolver 127.0.0.11 ipv6=off valid=30s;
   resolver_timeout 2s;
+
   geo $is_tor_exit {
     default 0;
     include /etc/nginx/iplists/tor_exits.geo;

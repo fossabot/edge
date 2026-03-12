@@ -63,6 +63,18 @@ Feature: Loop detector module behavior
       When I build two fingerprints with same query params in different key order
       Then the two fingerprints are equal
 
+    Scenario: BUG-13 body hash influences fingerprint
+      Given the nginx mock environment is reset
+      When I build the fingerprint with method "POST" and path "/v1/chat" and body_hash "h1"
+      And I build the fingerprint again with method "POST" and path "/v1/chat" and body_hash "h2"
+      Then the two fingerprints are different
+
+    Scenario: BUG-13 same body hash results in same fingerprint
+      Given the nginx mock environment is reset
+      When I build the fingerprint with method "POST" and path "/v1/chat" and body_hash "h1"
+      And I build the fingerprint again with method "POST" and path "/v1/chat" and body_hash "h1"
+      Then the two fingerprints are equal
+
   Rule: Config validation and fail-open behavior
     Scenario: AC-10 validation rejects threshold less than 2
       Given loop detection config has invalid threshold 1

@@ -36,6 +36,14 @@ fi
 : "${FAIRVISOR_BACKEND_URL:=http://127.0.0.1:8081}"
 : "${FAIRVISOR_WORKER_PROCESSES:=auto}"
 
+# GeoIP2 databases check
+if [ ! -f "/etc/geoip2/GeoLite2-Country.mmdb" ] || [ ! -f "/etc/geoip2/GeoLite2-ASN.mmdb" ]; then
+  echo "fairvisor: GeoIP2 databases missing in /etc/geoip2/" >&2
+  echo "fairvisor: Geo-based and ASN-based rate limiting are enabled in config, but databases are missing." >&2
+  echo "fairvisor: Please mount MaxMind .mmdb files to /etc/geoip2/ to continue." >&2
+  exit 1
+fi
+
 export FAIRVISOR_SHARED_DICT_SIZE
 export FAIRVISOR_LOG_LEVEL
 export FAIRVISOR_MODE

@@ -188,6 +188,14 @@ function _M.setup_time_mock()
   }
 end
 
+function _M.setup_package_mock()
+  package.loaded["resty.maxminddb"] = {
+    initted = function() return true end,
+    init = function() return true end,
+    lookup = function() return nil end,
+  }
+end
+
 function _M.setup_ngx()
   local time = _M.setup_time_mock()
   local dict = _M.mock_shared_dict()
@@ -209,6 +217,23 @@ function _M.setup_ngx()
     end,
     shared = {
       fairvisor_counters = dict,
+    },
+    req = {
+      read_body = function() end,
+      get_body_data = function() return nil end,
+      get_body_file = function() return nil end,
+      get_headers = function() return {} end,
+      get_uri_args = function() return {} end,
+    },
+    var = {
+      request_method = "GET",
+      uri = "/",
+      host = "localhost",
+      remote_addr = "127.0.0.1",
+      geoip2_data_country_iso_code = nil,
+      asn = nil,
+      fairvisor_asn_type = nil,
+      is_tor_exit = nil,
     },
     log = function(...)
       logs[#logs + 1] = { ... }

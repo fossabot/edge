@@ -19,6 +19,10 @@ runner:given("^the integration nginx environment is reset$", function(ctx)
     get_uri_args = function()
       return args
     end,
+    read_body = function() end,
+    get_body_data = function()
+      return ctx.request_body
+    end,
   }
 
   ngx.var = {

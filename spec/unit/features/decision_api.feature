@@ -69,6 +69,46 @@ Feature: Decision API unit behavior
       And request context host is "edge.internal"
       And the test cleanup restores globals
 
+    Scenario: BUG-9 read request body in reverse proxy mode
+      Given the decision api dependencies are initialized
+      And the mode is "reverse_proxy"
+      And request method is "POST" and path is "/v1/chat"
+      And the request body is "{\"foo\":\"bar\"}"
+      When I build request context
+      Then request context body is "{\"foo\":\"bar\"}"
+      And request context body_hash is present
+      And the test cleanup restores globals
+
+    Scenario: BUG-9 read request body from file (fallback)
+      Given the decision api dependencies are initialized
+      And the mode is "reverse_proxy"
+      And request method is "POST" and path is "/v1/chat"
+      And the request body is in file "test_body.tmp" with content "{\"large\":\"body\"}"
+      When I build request context
+      Then request context body is "{\"large\":\"body\"}"
+      And request context body_hash is present
+      And the test cleanup restores globals
+
+    Scenario: BUG-9 do not read body in decision service mode
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And request method is "POST" and path is "/v1/chat"
+      And the request body is "{\"foo\":\"bar\"}"
+      When I build request context
+      Then request context body is nil
+      And request context body_hash is nil
+      And the test cleanup restores globals
+
+    Scenario: BUG-9 do not read body for GET requests
+      Given the decision api dependencies are initialized
+      And the mode is "reverse_proxy"
+      And request method is "GET" and path is "/v1/chat"
+      And the request body is "{\"foo\":\"bar\"}"
+      When I build request context
+      Then request context body is nil
+      And request context body_hash is nil
+      And the test cleanup restores globals
+
   Rule: Access phase decision mapping
     Scenario: Returns 503 when no bundle exists
       Given the decision api dependencies are initialized

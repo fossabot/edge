@@ -112,6 +112,18 @@ runner:when("^I build the fingerprint again with method GET and path /v1/chat an
   ctx.second_fp = loop_detector.build_fingerprint("GET", "/v1/chat", { model = "gpt-4" }, nil, nil)
 end)
 
+runner:when(
+  "^I build the fingerprint with method \"([^\"]+)\" and path \"([^\"]+)\" and body_hash \"([^\"]+)\"$",
+   function(ctx, method, path, body_hash)
+  ctx.first_fp = loop_detector.build_fingerprint(method, path, nil, body_hash, nil)
+end)
+
+runner:when(
+  "^I build the fingerprint again with method \"([^\"]+)\" and path \"([^\"]+)\" and body_hash \"([^\"]+)\"$",
+   function(ctx, method, path, body_hash)
+  ctx.second_fp = loop_detector.build_fingerprint(method, path, nil, body_hash, nil)
+end)
+
 runner:when("^I build two fingerprints with same query params in different key order$", function(ctx)
   ctx.first_fp = loop_detector.build_fingerprint("POST", "/v1/chat", { b = "2", a = "1" }, nil, nil)
   ctx.second_fp = loop_detector.build_fingerprint("POST", "/v1/chat", { a = "1", b = "2" }, nil, nil)

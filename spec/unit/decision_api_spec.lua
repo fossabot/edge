@@ -53,6 +53,7 @@ local function _to_base64url(raw)
 end
 
 runner:given("^the decision api dependencies are initialized$", function(ctx)
+  mock_ngx.setup_package_mock()
   mock_ngx.setup_ngx()
 
   local headers = {}
@@ -65,6 +66,13 @@ runner:given("^the decision api dependencies are initialized$", function(ctx)
     get_uri_args = function()
       return uri_args
     end,
+    read_body = function() end,
+    get_body_data = function()
+      return ctx.request_body
+    end,
+    get_body_file = function()
+      return ctx.request_body_file
+    end,
   }
 
   ngx.var = {
@@ -72,6 +80,10 @@ runner:given("^the decision api dependencies are initialized$", function(ctx)
     uri = "/v1/decision",
     host = "edge.internal",
     remote_addr = "127.0.0.1",
+    geoip2_data_country_iso_code = nil,
+    asn = nil,
+    fairvisor_asn_type = nil,
+    is_tor_exit = nil,
   }
 
   ngx.header = {}
@@ -325,9 +337,44 @@ runner:given('^math random returns sequence "([^"]+)"$', function(ctx, values_cs
   end
 end)
 
+runner:given('^the request body is "(.*)"$', function(ctx, body)
+  ctx.request_body = body
+end)
+
+runner:given('^the request body is in file "(.*)" with content "(.*)"$', function(ctx, path, content)
+  local f = io.open(path, "wb")
+  if f then
+    f:write(content)
+    f:close()
+  end
+  ctx.request_body_file = path
+  ctx.test_cleanup_files = ctx.test_cleanup_files or {}
+  ctx.test_cleanup_files[#ctx.test_cleanup_files + 1] = path
+end)
+
+runner:given('^the request method is "([^"]+)"$', function(_, method)
+  ngx.var.request_method = method
+end)
+
 runner:when("^I decode the jwt payload from authorization header$", function(ctx)
   local auth = ngx.req.get_headers()["Authorization"]
   ctx.claims = decision_api.decode_jwt_payload(auth)
+end)
+runner:then_('^request context body is "(.*)"$', function(ctx, expected)
+  assert.are.equal(expected, ctx.request_context.body)
+end)
+
+runner:then_('^request context body_hash is present$', function(ctx)
+  assert.is_not_nil(ctx.request_context.body_hash)
+  assert.are.equal(64, #ctx.request_context.body_hash) -- hex sha256 is 64 chars
+end)
+
+runner:then_('^request context body is nil$', function(ctx)
+  assert.is_nil(ctx.request_context.body)
+end)
+
+runner:then_('^request context body_hash is nil$', function(ctx)
+  assert.is_nil(ctx.request_context.body_hash)
 end)
 
 runner:when("^I build request context$", function(ctx)
@@ -571,6 +618,16 @@ runner:then_("^the test cleanup restores globals$", function(ctx)
   if ctx.original_random then
     math.random = ctx.original_random
   end
+
+  if ctx.test_cleanup_files then
+    for _, path in ipairs(ctx.test_cleanup_files) do
+      os.remove(path)
+    end
+    ctx.test_cleanup_files = nil
+  end
+
+  ctx.request_body = nil
+  ctx.request_body_file = nil
 
   os.getenv = ctx.original_getenv
 end)

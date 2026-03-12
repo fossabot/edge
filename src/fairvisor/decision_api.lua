@@ -29,6 +29,7 @@ local _deps = {
   rule_engine = nil,
   health = nil,
   saas_client = nil,
+  geoip = nil,
 }
 
 local _config = {
@@ -623,11 +624,55 @@ function _M.build_request_context(bundle)
     host = _first_header(headers, "X-Original-Host") or host
   end
 
+  local body = nil
+  local body_hash = nil
+  if not decision_service_mode and (method == "POST" or method == "PUT" or method == "PATCH") then
+    ngx.req.read_body()
+    body = ngx.req.get_body_data()
+    if body and #body > 1048576 then
+      body = string_sub(body, 1, 1048576)
+    end
+
+    if not body then
+      local body_file = ngx.req.get_body_file()
+      if body_file then
+        local f = io.open(body_file, "rb")
+        if f then
+          -- Limit body reading to 1MB to avoid memory pressure
+          body = f:read(1048576)
+          f:close()
+        end
+      end
+    end
+
+    if body then
+      -- If body was read from disk and was larger than 1MB, we only have the first 1MB.
+      -- For hash consistency, we hash what we have.
+      body_hash = utils.to_hex(utils.sha256(body))
+    end
+  end
+
   local auth_header = _first_header(headers, "Authorization")
   local descriptor_hints = bundle and bundle.descriptor_hints or {}
   local needs_user_agent = true
   if bundle ~= nil then
     needs_user_agent = descriptor_hints and descriptor_hints.needs_user_agent == true
+  end
+
+  local ip_address = ngx.var.remote_addr
+  local ip_country = _safe_var("geoip2_data_country_iso_code") or _first_header(headers, "X-Country-Code")
+  local ip_asn = _safe_var("asn") or _first_header(headers, "X-ASN")
+
+  if _deps.geoip and _deps.geoip.initted() and ip_address then
+    local res_country = _deps.geoip.lookup(ip_address, nil, "country")
+    if res_country and res_country.country then
+      ip_country = res_country.country.iso_code or ip_country
+    end
+
+    local res_asn = _deps.geoip.lookup(ip_address, nil, "asn")
+    if res_asn then
+      ip_asn = res_asn.autonomous_system_number or ip_asn
+    end
   end
 
   return {
@@ -637,13 +682,15 @@ function _M.build_request_context(bundle)
     headers = headers,
     query_params = ngx.req.get_uri_args(),
     jwt_claims = _M.decode_jwt_payload(auth_header),
-    ip_address = ngx.var.remote_addr,
-    ip_country = _safe_var("geoip2_data_country_iso_code") or _first_header(headers, "X-Country-Code"),
-    ip_asn = _safe_var("asn") or _first_header(headers, "X-ASN"),
+    ip_address = ip_address,
+    ip_country = ip_country,
+    ip_asn = ip_asn,
     ip_type = _safe_var("fairvisor_asn_type") or _first_header(headers, "X-ASN-Type"),
     ip_tor = _normalize_boolish(_first_header(headers, "X-Tor-Exit")) or _normalize_boolish(_safe_var("is_tor_exit")),
     user_agent = needs_user_agent and _first_header(headers, "User-Agent") or nil,
     provider = _detect_provider(path),
+    body = body,
+    body_hash = body_hash,
   }
 end
 
@@ -758,6 +805,33 @@ function _M.init(deps)
 
   if not deps.health or type(deps.health.inc) ~= "function" then
     _log_warn("init health not provided or health.inc missing; decision metrics disabled")
+  end
+
+  local geoip_ok, geoip = pcall(require, "resty.maxminddb")
+  if geoip_ok then
+    _deps.geoip = geoip
+    local country_db = "/etc/geoip2/GeoLite2-Country.mmdb"
+    local asn_db = "/etc/geoip2/GeoLite2-ASN.mmdb"
+
+    local dbs = {}
+    local f_country = io.open(country_db, "rb")
+    if f_country then
+      f_country:close()
+      dbs.country = country_db
+    end
+
+    local f_asn = io.open(asn_db, "rb")
+    if f_asn then
+      f_asn:close()
+      dbs.asn = asn_db
+    end
+
+    if dbs.country or dbs.asn then
+      local ok, err = pcall(geoip.init, dbs)
+      if not ok then
+        _log_err("geoip_init_failed err=", err)
+      end
+    end
   end
 
   local mode = os.getenv("FAIRVISOR_MODE")

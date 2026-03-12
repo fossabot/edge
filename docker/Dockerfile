@@ -4,11 +4,16 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
   && apt-get install -y --no-install-recommends \
   gettext-base \
   python3 \
+  libmaxminddb0 \
+  mmdb-bin \
   && rm -rf /var/lib/apt/lists/*
+
+RUN opm get anjia0532/lua-resty-maxminddb
 
 WORKDIR /opt/fairvisor
 
-RUN mkdir -p /etc/fairvisor /etc/nginx/iplists
+RUN mkdir -p /etc/fairvisor /etc/nginx/iplists /etc/geoip2
+RUN touch /etc/geoip2/GeoLite2-Country.mmdb /etc/geoip2/GeoLite2-ASN.mmdb
 
 COPY src /opt/fairvisor/src
 COPY bin/generate_asn_type_map.py /opt/fairvisor/bin/generate_asn_type_map.py
