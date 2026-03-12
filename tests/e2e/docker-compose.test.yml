@@ -165,3 +165,39 @@ services:
       timeout: 2s
       retries: 10
       start_period: 5s
+
+  mock_llm_backend:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./mock-llm-backend.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:80/"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
+
+  edge_llm_reconcile:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "18088:8080"
+    environment:
+      FAIRVISOR_CONFIG_FILE: /etc/fairvisor/policy.json
+      FAIRVISOR_SHARED_DICT_SIZE: 4m
+      FAIRVISOR_LOG_LEVEL: info
+      FAIRVISOR_MODE: reverse_proxy
+      FAIRVISOR_BACKEND_URL: http://mock_llm_backend:80
+      FAIRVISOR_WORKER_PROCESSES: "1"
+    volumes:
+      - ./policy_llm_reconcile.json:/etc/fairvisor/policy.json:ro
+    depends_on:
+      mock_llm_backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 5s

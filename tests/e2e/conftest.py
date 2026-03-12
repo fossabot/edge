@@ -18,6 +18,7 @@ EDGE_5M_URL = os.environ.get("FAIRVISOR_E2E_5M_URL", "http://localhost:18083")
 EDGE_NOBUNDLE_URL = os.environ.get("FAIRVISOR_E2E_NOBUNDLE_URL", "http://localhost:18084")
 EDGE_REVERSE_URL = os.environ.get("FAIRVISOR_E2E_REVERSE_URL", "http://localhost:18085")
 EDGE_ASN_URL = os.environ.get("FAIRVISOR_E2E_ASN_URL", "http://localhost:18087")
+EDGE_LLM_RECONCILE_URL = os.environ.get("FAIRVISOR_E2E_LLM_RECONCILE_URL", "http://localhost:18088")
 HEALTH_TIMEOUT_S = float(os.environ.get("FAIRVISOR_E2E_HEALTH_TIMEOUT", "15"))
 COMPOSE_FILE = os.path.join(os.path.dirname(__file__), "docker-compose.test.yml")
 
@@ -166,5 +167,17 @@ def edge_asn_base_url():
         return url
     pytest.skip(
         "Edge ASN container not ready at {}. Run: docker compose -f tests/e2e/docker-compose.test.yml up -d".format(url)
+    )
+
+
+@pytest.fixture(scope="session")
+def edge_llm_reconcile_base_url():
+    """Base URL of the LLM token reconciliation profile container (reverse_proxy + mock LLM backend)."""
+    url = EDGE_LLM_RECONCILE_URL
+    ready, _ = _wait_ready(url, HEALTH_TIMEOUT_S)
+    if ready:
+        return url
+    pytest.skip(
+        "Edge LLM reconcile container not ready at {}. Run: docker compose -f tests/e2e/docker-compose.test.yml up -d".format(url)
     )
 

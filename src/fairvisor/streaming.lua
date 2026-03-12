@@ -10,6 +10,7 @@ local string_lower = string.lower
 local table_concat = table.concat
 
 local llm_limiter = require("fairvisor.llm_limiter")
+local cost_extractor = require("fairvisor.cost_extractor")
 
 local utils = require("fairvisor.utils")
 local json_lib = utils.get_json()
@@ -203,6 +204,62 @@ local function _reconcile_once(ctx)
   end
 end
 
+-- Non-streaming token reconciliation: buffer response body, extract actual usage,
+-- refund unused tokens to TPM/TPD buckets (Feature 015 / Issue #12).
+local function _reconcile_non_streaming(ctx)
+  if ctx.reconciled then
+    return
+  end
+  ctx.reconciled = true
+
+  if not llm_limiter or type(llm_limiter.reconcile) ~= "function" then
+    return
+  end
+
+  local dict = ngx.shared and ngx.shared.fairvisor_counters
+  if not dict then
+    return
+  end
+
+  local reserved = ctx.reserved
+  if type(reserved) ~= "number" or reserved <= 0 then
+    return
+  end
+
+  local key = ctx.key
+  if type(key) ~= "string" or key == "" then
+    return
+  end
+
+  -- Attempt to extract actual token count from buffered response body.
+  -- Default to reserved (no refund) on extraction failure to avoid over-refunding.
+  local actual_total = reserved
+  local body = ctx.body_buffer or ""
+  if body ~= "" then
+    local extractor_config = {}
+    if type(ctx.config) == "table" and type(ctx.config.cost_extractor) == "table" then
+      for k, v in pairs(ctx.config.cost_extractor) do
+        extractor_config[k] = v
+      end
+    end
+    local ok_cfg = cost_extractor.validate_config(extractor_config)
+    if ok_cfg then
+      local result, err = cost_extractor.extract_from_response(body, extractor_config)
+      if result and type(result.total_tokens) == "number" then
+        actual_total = result.total_tokens
+      else
+        _log_err("_reconcile_non_streaming key=", key, " extraction_error=", tostring(err))
+      end
+    end
+  end
+
+  local now = utils.now()
+  local ok, err = pcall(llm_limiter.reconcile, dict, key, ctx.config, reserved, actual_total, now)
+  if not ok then
+    _log_err("_reconcile_non_streaming reconcile_failed key=", key, " err=", tostring(err))
+  end
+end
+
 local function _log_would_truncate(ctx)
   _log_info("body_filter reason=would_truncate key=", tostring(ctx.key),
     " tokens_used=", tostring(ctx.tokens_used),
@@ -263,6 +320,7 @@ function _M.init_stream(config, request_context, reservation)
     tokens_used = 0,
     chunk_count = 0,
     buffer = "",
+    body_buffer = "",
     next_check = stream_settings.buffer_tokens or DEFAULT_BUFFER_TOKENS,
     on_limit_exceeded = stream_settings.on_limit_exceeded or DEFAULT_LIMIT_EXCEEDED_MODE,
     include_partial_usage = stream_settings.include_partial_usage ~= false,
@@ -283,9 +341,33 @@ function _M.init_stream(config, request_context, reservation)
   return ctx
 end
 
+local NON_STREAMING_MAX_BUFFER = 1048576  -- 1 MiB per spec
+
 function _M.body_filter(chunk, eof)
   local stream_ctx = ngx.ctx and ngx.ctx.fairvisor_stream
-  if not stream_ctx or not stream_ctx.active then
+  if not stream_ctx then
+    return chunk
+  end
+
+  if not stream_ctx.active then
+    -- Non-streaming path: buffer response body for token reconciliation.
+    if not stream_ctx.reconciled and type(stream_ctx.key) == "string" and stream_ctx.key ~= "" then
+      local in_chunk = chunk or ""
+      if in_chunk ~= "" then
+        local buf = stream_ctx.body_buffer or ""
+        local space = NON_STREAMING_MAX_BUFFER - #buf
+        if space > 0 then
+          if #in_chunk <= space then
+            stream_ctx.body_buffer = buf .. in_chunk
+          else
+            stream_ctx.body_buffer = buf .. string_sub(in_chunk, 1, space)
+          end
+        end
+      end
+      if eof then
+        _reconcile_non_streaming(stream_ctx)
+      end
+    end
     return chunk
   end
 

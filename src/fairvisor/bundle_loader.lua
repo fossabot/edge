@@ -237,6 +237,14 @@ local function _validate_rule(policy_id, rule, policy_index, rule_index, errors)
     return nil
   end
 
+  -- Merge validated/normalised fields (including computed private fields like _tpm_bucket_config)
+  -- back into rule.algorithm_config so they are available at request time.
+  for k, v in pairs(config_to_validate) do
+    if k ~= "algorithm" then
+      rule.algorithm_config[k] = v
+    end
+  end
+
   return true
 end
 

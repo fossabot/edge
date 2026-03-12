@@ -656,6 +656,7 @@ function _M.evaluate(request_context, bundle)
 
   local last_allow_limit_result = nil
   local last_allow_policy_id = nil
+  local last_allow_rule_name = nil
   local last_allow_descriptors = nil
   local pending_non_reject = nil
 
@@ -783,8 +784,12 @@ function _M.evaluate(request_context, bundle)
           })
 
           if limit_result then
+            if rule.algorithm == "token_bucket_llm" and limit_result.allowed ~= false then
+              limit_result.key = counter_key
+            end
             last_allow_limit_result = limit_result
             last_allow_policy_id = policy_id
+            last_allow_rule_name = rule.name
           end
 
           if limit_result and limit_result.allowed == false then
@@ -882,6 +887,7 @@ function _M.evaluate(request_context, bundle)
   return _finalize_decision(_build_decision("allow", "all_rules_passed", {
     limit_result = last_allow_limit_result,
     policy_id = last_allow_policy_id,
+    rule_name = last_allow_rule_name,
     matched_policy_count = matched_count,
     debug_descriptors = last_allow_descriptors,
   }), start_time, runtime_flags, request_context, last_allow_descriptors)

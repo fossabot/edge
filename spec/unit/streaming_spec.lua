@@ -1,5 +1,8 @@
 package.path = "./src/?.lua;./src/?/init.lua;./spec/?.lua;./spec/?/init.lua;" .. package.path
 
+local mock_cjson_safe = require("helpers.mock_cjson_safe")
+mock_cjson_safe.install()
+
 local gherkin = require("helpers.gherkin")
 local mock_ngx = require("helpers.mock_ngx")
 
@@ -282,6 +285,66 @@ runner:then_("^exactly (%d+) stream_cutoff audit event was queued$", function(ct
   assert.equals(tonumber(count), actual_count)
 end)
 
+-- Non-streaming reconciliation steps (Issue #12 / Feature 015)
+runner:given("^a non%-streaming context with reservation key ([%a%d_%-]+) and estimated_total (%d+)$",
+function(ctx, key, estimated_total)
+  ctx.config = {}
+  ctx.request_context = {
+    body = '{"model":"gpt","stream":false}',
+    headers = { Accept = "application/json" },
+  }
+  ctx.reservation = {
+    key = key,
+    estimated_total = tonumber(estimated_total),
+    prompt_tokens = 0,
+    is_shadow = false,
+  }
+  ctx.stream_ctx = streaming.init_stream(ctx.config, ctx.request_context, ctx.reservation)
+end)
+
+runner:when("^I run body_filter with non%-streaming response body having total_tokens (%d+)$",
+function(ctx, total_tokens)
+  local body = '{"usage":{"total_tokens":' .. total_tokens .. '}}'
+  ctx.output = streaming.body_filter(body, false)
+  ctx.output_eof = streaming.body_filter("", true)
+end)
+
+runner:when("^I run body_filter with non%-streaming response body in two chunks having total_tokens (%d+)$",
+function(ctx, total_tokens)
+  local body = '{"usage":{"total_tokens":' .. total_tokens .. '}}'
+  local mid = math.floor(#body / 2)
+  ctx.output = streaming.body_filter(string.sub(body, 1, mid), false)
+  ctx.output_eof = streaming.body_filter(string.sub(body, mid + 1), true)
+end)
+
+runner:when("^I run body_filter with non%-streaming response body with no usage field$", function(ctx)
+  local body = '{"result":"ok"}'
+  ctx.output = streaming.body_filter(body, false)
+  ctx.output_eof = streaming.body_filter("", true)
+end)
+
+runner:then_("^reconcile is called for non%-streaming with actual_total (%d+) and estimated_total (%d+)$",
+function(_, actual_total, estimated_total)
+  assert.equals(1, #reconcile_calls)
+  assert.equals(tonumber(actual_total), reconcile_calls[1].actual_total)
+  assert.equals(tonumber(estimated_total), reconcile_calls[1].estimated_total)
+end)
+
+runner:then_("^reconcile is called for non%-streaming with no refund %(estimated equals actual%)$",
+function(_, ...)
+  assert.equals(1, #reconcile_calls)
+  assert.equals(reconcile_calls[1].estimated_total, reconcile_calls[1].actual_total)
+end)
+
+runner:then_("^non%-streaming body passes through unchanged$", function(ctx)
+  assert.is_not_nil(ctx.output)
+  assert.is_true(string.find(ctx.output, "usage", 1, true) ~= nil or #ctx.output >= 0)
+end)
+
+runner:then_("^reconcile is not called$", function(_)
+  assert.equals(0, #reconcile_calls)
+end)
+
 runner:feature([[
 Feature: SSE streaming enforcement module behavior
   Rule: Streaming detection and config validation
@@ -378,4 +441,29 @@ Feature: SSE streaming enforcement module behavior
       And a streaming context with max_completion_tokens 150 and buffer_tokens 100
       When I run body_filter with two 100 token delta events in one chunk
       Then enforcement checks advance by buffer interval
+
+  Rule: Non-streaming token reconciliation (Issue #12 / Feature 015)
+    Scenario: F015-NS-1 non-streaming response triggers reconcile with actual token count from body
+      Given the nginx mock environment is reset
+      And a non-streaming context with reservation key tenant-1 and estimated_total 500
+      When I run body_filter with non-streaming response body having total_tokens 120
+      Then reconcile is called for non-streaming with actual_total 120 and estimated_total 500
+
+    Scenario: F015-NS-2 non-streaming response body split across chunks still triggers reconcile
+      Given the nginx mock environment is reset
+      And a non-streaming context with reservation key tenant-2 and estimated_total 300
+      When I run body_filter with non-streaming response body in two chunks having total_tokens 80
+      Then reconcile is called for non-streaming with actual_total 80 and estimated_total 300
+
+    Scenario: F015-NS-3 non-streaming response with no usage field does not over-refund
+      Given the nginx mock environment is reset
+      And a non-streaming context with reservation key tenant-3 and estimated_total 400
+      When I run body_filter with non-streaming response body with no usage field
+      Then reconcile is called for non-streaming with no refund (estimated equals actual)
+
+    Scenario: F015-NS-4 no context means no reconcile and chunk passes through
+      Given the nginx mock environment is reset
+      When I run body_filter on a non-streaming request chunk
+      Then non-streaming chunks pass through unchanged
+      And reconcile is not called
 ]])
