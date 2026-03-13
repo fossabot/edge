@@ -37,6 +37,7 @@ local function _reload_modules()
   package.loaded["fairvisor.kill_switch"] = nil
   package.loaded["fairvisor.cost_budget"] = nil
   package.loaded["fairvisor.llm_limiter"] = nil
+  package.loaded["fairvisor.circuit_breaker"] = nil
 
   return require("fairvisor.bundle_loader"), require("fairvisor.health")
 end
@@ -473,6 +474,48 @@ end)
 runner:then_("^validation API reports success$", function(ctx)
   assert.is_true(ctx.validation_ok)
   assert.is_nil(ctx.validation_api_errors)
+end)
+
+-- Circuit breaker reset steps
+runner:given("^a bundle with reset_circuit_breakers listing \"([^\"]+)\"$", function(ctx, limit_key)
+  ctx.bundle = mock_bundle.new_bundle({ bundle_version = 42 })
+  ctx.bundle.reset_circuit_breakers = { limit_key }
+  ctx.payload = mock_bundle.encode(ctx.bundle)
+  ctx.cb_limit_key = limit_key
+end)
+
+runner:given("^a bundle with reset_circuit_breakers set to a non%-array value$", function(ctx)
+  ctx.bundle = mock_bundle.new_bundle({ bundle_version = 42 })
+  ctx.bundle.reset_circuit_breakers = "not-an-array"
+  ctx.payload = mock_bundle.encode(ctx.bundle)
+end)
+
+runner:given("^a bundle with reset_circuit_breakers containing an empty string$", function(ctx)
+  ctx.bundle = mock_bundle.new_bundle({ bundle_version = 42 })
+  ctx.bundle.reset_circuit_breakers = { "" }
+  ctx.payload = mock_bundle.encode(ctx.bundle)
+end)
+
+runner:then_("^the compiled bundle carries reset_circuit_breakers with (%d+) entr[yi]e?s?$", function(ctx, n)
+  assert.is_table(ctx.compiled.reset_circuit_breakers)
+  assert.equals(tonumber(n), #ctx.compiled.reset_circuit_breakers)
+end)
+
+runner:then_("^circuit breaker state for \"([^\"]+)\" is cleared$", function(ctx, limit_key)
+  local cb = require("fairvisor.circuit_breaker")
+  local state_key = cb.build_state_key(limit_key)
+  local val = ctx.env.dict:get(state_key)
+  assert.is_nil(val)
+end)
+
+runner:given("^the loader is initialized with the shared dict$", function(ctx)
+  ctx.loader.init({ dict = ctx.env.dict })
+end)
+
+runner:given("^circuit breaker state for \"([^\"]+)\" is open in shared dict$", function(ctx, limit_key)
+  local cb = require("fairvisor.circuit_breaker")
+  local state_key = cb.build_state_key(limit_key)
+  ctx.env.dict:set(state_key, "open:12345")
 end)
 
 runner:feature_file_relative("features/bundle_loader.feature")

@@ -211,3 +211,28 @@ Feature: Policy bundle loader
       Then the load succeeds
       And the compiled bundle has 1 valid policies
       And the compiled policy selector host at index 1 is "api.example.com"
+
+  Rule: Circuit breaker reset via bundle
+    Scenario: bundle with reset_circuit_breakers clears state for listed keys on apply
+      Given the bundle loader environment is reset
+      And a bundle with reset_circuit_breakers listing "cb:my-policy:org1"
+      And current version is nil
+      When I load the unsigned bundle
+      Then the load succeeds
+      And the compiled bundle carries reset_circuit_breakers with 1 entry
+      When I apply the compiled bundle
+      Then circuit breaker state for "cb:my-policy:org1" is cleared
+
+    Scenario: bundle with invalid reset_circuit_breakers is rejected
+      Given the bundle loader environment is reset
+      And a bundle with reset_circuit_breakers set to a non-array value
+      And current version is nil
+      When I load the unsigned bundle
+      Then the load fails with error "reset_circuit_breakers must be an array of strings"
+
+    Scenario: bundle with empty reset_circuit_breakers entry is rejected
+      Given the bundle loader environment is reset
+      And a bundle with reset_circuit_breakers containing an empty string
+      And current version is nil
+      When I load the unsigned bundle
+      Then the load fails with error "reset_circuit_breakers[1] must be a non-empty string"

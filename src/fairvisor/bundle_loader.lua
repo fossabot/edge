@@ -14,6 +14,7 @@ local route_index = require("fairvisor.route_index")
 local token_bucket = require("fairvisor.token_bucket")
 local cost_budget = require("fairvisor.cost_budget")
 local llm_limiter = require("fairvisor.llm_limiter")
+local circuit_breaker = require("fairvisor.circuit_breaker")
 
 local utils = require("fairvisor.utils")
 local json_lib = utils.get_json()
@@ -22,7 +23,8 @@ local DEFAULT_HOT_RELOAD_INTERVAL = 5
 
 local _current_bundle
 local _deps = {
-  saas_client = nil
+  saas_client = nil,
+  dict = nil,
 }
 
 local _M = {}
@@ -30,6 +32,7 @@ local _M = {}
 function _M.init(deps)
   if type(deps) == "table" then
     _deps.saas_client = deps.saas_client
+    _deps.dict = deps.dict
   end
   return true
 end
@@ -472,6 +475,17 @@ local function _validate_top_level(bundle)
     return nil, ks_override_err
   end
 
+  if bundle.reset_circuit_breakers ~= nil then
+    if type(bundle.reset_circuit_breakers) ~= "table" then
+      return nil, "reset_circuit_breakers must be an array of strings"
+    end
+    for i, key in ipairs(bundle.reset_circuit_breakers) do
+      if type(key) ~= "string" or key == "" then
+        return nil, "reset_circuit_breakers[" .. tostring(i) .. "] must be a non-empty string"
+      end
+    end
+  end
+
   return true
 end
 
@@ -614,6 +628,7 @@ function _M.load_from_string(json_string, signing_key, current_version)
     kill_switches = bundle.kill_switches or {},
     global_shadow = bundle.global_shadow,
     kill_switch_override = bundle.kill_switch_override,
+    reset_circuit_breakers = bundle.reset_circuit_breakers,
     route_index = route_idx,
     defaults = bundle.defaults or {},
     descriptor_hints = _collect_descriptor_hints(bundle),
@@ -648,6 +663,16 @@ end
 function _M.apply(compiled)
   if type(compiled) ~= "table" then
     return nil, "compiled_bundle_required"
+  end
+
+  if type(compiled.reset_circuit_breakers) == "table" and #compiled.reset_circuit_breakers > 0 then
+    local dict = _deps.dict or (ngx and ngx.shared and ngx.shared.fairvisor_counters)
+    if dict then
+      local now = ngx and ngx.now and ngx.now() or nil
+      for _, limit_key in ipairs(compiled.reset_circuit_breakers) do
+        circuit_breaker.reset(dict, limit_key, now)
+      end
+    end
   end
 
   _current_bundle = compiled
