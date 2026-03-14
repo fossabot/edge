@@ -252,3 +252,237 @@ describe("utils.fairvisor_json (inlined JSON codec)", function()
     end)
   end)
 end)
+
+-- ============================================================
+-- Issue #25: targeted coverage additions for utils.lua
+-- ============================================================
+
+describe("utils.now", function()
+  it("returns 0 when ngx is not available", function()
+    local saved = _G.ngx
+    _G.ngx = nil
+    local v = utils.now()
+    _G.ngx = saved
+    assert.equals(0, v)
+  end)
+
+  it("returns ngx.now() value when ngx is available", function()
+    local saved = _G.ngx
+    _G.ngx = { now = function() return 12345.6 end }
+    local v = utils.now()
+    _G.ngx = saved
+    assert.equals(12345.6, v)
+  end)
+end)
+
+describe("utils.safe_require", function()
+  it("returns nil for a module that does not exist", function()
+    assert.is_nil(utils.safe_require("__no_such_module_xyz__"))
+  end)
+
+  it("returns the module for an existing module", function()
+    local m = utils.safe_require("fairvisor.utils")
+    assert.is_not_nil(m)
+    assert.is_function(m.now)
+  end)
+end)
+
+describe("utils.to_hex", function()
+  it("converts binary bytes to hex string", function()
+    assert.equals("00ffab", utils.to_hex("\0\255\171"))
+  end)
+
+  it("returns empty string for empty input", function()
+    assert.equals("", utils.to_hex(""))
+  end)
+
+  it("returns nil for non-string input", function()
+    assert.is_nil(utils.to_hex(nil))
+    assert.is_nil(utils.to_hex(42))
+  end)
+end)
+
+describe("utils.constant_time_equals", function()
+  it("returns false when first argument is not a string", function()
+    assert.is_false(utils.constant_time_equals(nil, "x"))
+    assert.is_false(utils.constant_time_equals(1, "x"))
+  end)
+
+  it("returns false when second argument is not a string", function()
+    assert.is_false(utils.constant_time_equals("x", nil))
+  end)
+
+  it("returns false for different strings of same length", function()
+    assert.is_false(utils.constant_time_equals("abc", "xyz"))
+  end)
+
+  it("returns false for different-length strings", function()
+    assert.is_false(utils.constant_time_equals("ab", "abc"))
+  end)
+
+  it("returns true for identical strings", function()
+    assert.is_true(utils.constant_time_equals("secret", "secret"))
+  end)
+
+  it("returns true for empty strings", function()
+    assert.is_true(utils.constant_time_equals("", ""))
+  end)
+end)
+
+describe("utils.encode_base64 without ngx", function()
+  it("returns nil when ngx.encode_base64 is not available", function()
+    local saved = _G.ngx
+    _G.ngx = nil
+    local result = utils.encode_base64("hello")
+    _G.ngx = saved
+    assert.is_nil(result)
+  end)
+end)
+
+describe("utils.decode_base64 fallback (no ngx)", function()
+  it("decodes a standard base64 string", function()
+    local saved = _G.ngx
+    _G.ngx = nil
+    local result = utils.decode_base64("aGVsbG8=")
+    _G.ngx = saved
+    assert.equals("hello", result)
+  end)
+
+  it("decodes base64 without padding", function()
+    local saved = _G.ngx
+    _G.ngx = nil
+    local result = utils.decode_base64("YWJj")
+    _G.ngx = saved
+    assert.equals("abc", result)
+  end)
+
+  it("returns nil for a string containing an invalid character", function()
+    local saved = _G.ngx
+    _G.ngx = nil
+    local result = utils.decode_base64("not!valid!!")
+    _G.ngx = saved
+    assert.is_nil(result)
+  end)
+end)
+
+describe("utils.base64url_decode", function()
+  it("returns nil for non-string input", function()
+    assert.is_nil(utils.base64url_decode(nil))
+    assert.is_nil(utils.base64url_decode(42))
+  end)
+
+  it("returns nil for empty string", function()
+    assert.is_nil(utils.base64url_decode(""))
+  end)
+
+  it("returns nil when remainder after padding is 1 (invalid)", function()
+    local saved = _G.ngx
+    _G.ngx = nil
+    local result = utils.base64url_decode("a")
+    _G.ngx = saved
+    assert.is_nil(result)
+  end)
+
+  it("decodes a valid base64url string (no padding)", function()
+    local saved = _G.ngx
+    _G.ngx = nil
+    local result = utils.base64url_decode("aGVsbG8")
+    _G.ngx = saved
+    assert.equals("hello", result)
+  end)
+end)
+
+describe("utils.sha256", function()
+  it("returns nil for nil input (guard branch)", function()
+    local result = utils.sha256(nil)
+    assert.is_nil(result)
+  end)
+
+  it("returns a value or graceful error without crashing", function()
+    local result, err = utils.sha256("test-input")
+    assert.is_true(result ~= nil or err ~= nil)
+  end)
+end)
+
+describe("utils.fairvisor_json additional branches", function()
+  it("encode returns error for object with non-integer-sequence key", function()
+    local s, err = json.encode({ [1.5] = "v" })
+    assert.is_nil(s)
+    assert.is_string(err)
+  end)
+
+  it("encode returns nil and error for value of unsupported type (function)", function()
+    local s, err = json.encode({ fn = function() end })
+    assert.is_nil(s)
+    assert.is_string(err)
+  end)
+
+  it("decode returns error for invalid number '-'", function()
+    local v, err = json.decode("-")
+    assert.is_nil(v)
+    assert.is_string(err)
+  end)
+
+  it("decode returns error for unterminated array", function()
+    local v, err = json.decode("[1,2")
+    assert.is_nil(v)
+    assert.is_string(err)
+  end)
+
+  it("decode returns error for unterminated object", function()
+    local v, err = json.decode('{"a":1')
+    assert.is_nil(v)
+    assert.is_string(err)
+  end)
+
+  it("decode handles escape sequences b, f, r and /", function()
+    local v, err = json.decode('{"b":"\\b","f":"\\f","r":"\\r","sl":"\\/"}')
+    assert.is_nil(err)
+    assert.equals("\b", v.b)
+    assert.equals("\f", v.f)
+    assert.equals("\r", v.r)
+    assert.equals("/",  v.sl)
+  end)
+
+  it("decode returns error for expected ',' or ']' missing in array", function()
+    local v, err = json.decode("[1 2]")
+    assert.is_nil(v)
+    assert.is_string(err)
+  end)
+
+  it("decode returns error for expected ',' or '}' missing in object", function()
+    local v, err = json.decode('{"a":1 "b":2}')
+    assert.is_nil(v)
+    assert.is_string(err)
+  end)
+end)
+
+describe("utils.get_json (chain)", function()
+  it("returns a table with decode and encode functions", function()
+    local jl = utils.get_json()
+    assert.is_table(jl)
+    assert.is_function(jl.decode)
+    assert.is_function(jl.encode)
+  end)
+
+  it("decode handles valid JSON", function()
+    local jl = utils.get_json()
+    local v, err = jl.decode('{"x":1}')
+    assert.is_nil(err)
+    assert.equals(1, v.x)
+  end)
+
+  it("decode returns error for non-string input", function()
+    local jl = utils.get_json()
+    local v, err = jl.decode(123)
+    assert.is_nil(v)
+    assert.is_string(err)
+  end)
+
+  it("encode handles a table", function()
+    local jl = utils.get_json()
+    local s, err = jl.encode({ k = "v" })
+    assert.is_nil(err)
+    assert.is_string(s)
+  end)
+end)

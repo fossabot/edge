@@ -345,6 +345,135 @@ runner:then_("^reconcile is not called$", function(_)
   assert.equals(0, #reconcile_calls)
 end)
 
+-- Issue #25: additional step definitions for coverage gaps
+runner:given("^a streaming context with include_partial_usage disabled$", function(ctx)
+  ctx.config = {
+    max_completion_tokens = 50,
+    streaming = {
+      enabled = true,
+      enforce_mid_stream = true,
+      buffer_tokens = 50,
+      on_limit_exceeded = "graceful_close",
+      include_partial_usage = false,
+    },
+  }
+  ctx.request_context = {
+    body = '{"stream":true}',
+    headers = { Accept = "text/event-stream" },
+  }
+  ctx.reservation = {
+    key = "tenant-no-usage",
+    estimated_total = 5000,
+    prompt_tokens = 10,
+    is_shadow = false,
+  }
+  ctx.stream_ctx = streaming.init_stream(ctx.config, ctx.request_context, ctx.reservation)
+end)
+
+runner:given("^a streaming context with leftover buffer data$", function(ctx)
+  ctx.config = {
+    max_completion_tokens = 5000,
+    streaming = {
+      enabled = true,
+      enforce_mid_stream = true,
+      buffer_tokens = 100,
+      on_limit_exceeded = "graceful_close",
+      include_partial_usage = true,
+    },
+  }
+  ctx.request_context = { body = '{"stream":true}', headers = {} }
+  ctx.reservation = {
+    key = "tenant-buf",
+    estimated_total = 5000,
+    prompt_tokens = 0,
+    is_shadow = false,
+  }
+  ctx.stream_ctx = streaming.init_stream(ctx.config, ctx.request_context, ctx.reservation)
+end)
+
+runner:given("^a streaming context is truncated$", function(ctx)
+  ctx.stream_ctx.truncated = true
+end)
+
+runner:when("^I run body_filter with a non%-eof chunk on the truncated stream$", function(ctx)
+  ctx.output = streaming.body_filter("some data", false)
+end)
+
+runner:when("^I run body_filter with eof on the truncated stream$", function(ctx)
+  ctx.output = streaming.body_filter("", true)
+end)
+
+runner:when("^I send an empty data%-only SSE event$", function(ctx)
+  ctx.output = streaming.body_filter("data:\n\n", false)
+end)
+
+runner:when("^I run body_filter with partial SSE then eof$", function(ctx)
+  -- Send a partial event (no double-newline terminator) then close with eof
+  ctx.output  = streaming.body_filter("data: incomplete", false)
+  ctx.output2 = streaming.body_filter("", true)
+end)
+
+runner:then_("^the truncated stream returns empty string$", function(ctx)
+  assert.equals("", ctx.output)
+end)
+
+runner:then_("^the empty data event passes through with zero tokens$", function(ctx)
+  assert.equals(0, ctx.stream_ctx.tokens_used)
+  assert.is_string(ctx.output)
+end)
+
+runner:then_("^the partial buffer is flushed on eof$", function(ctx)
+  -- The unfinished SSE fragment should be in output2 (flushed at eof)
+  assert.is_truthy(string.find(ctx.output2 or "", "incomplete", 1, true)
+    or string.find((ctx.output or "") .. (ctx.output2 or ""), "incomplete", 1, true))
+end)
+
+runner:then_("^the termination event has no usage field$", function(ctx)
+  assert.is_nil(string.find(ctx.output, "usage", 1, true))
+end)
+
+runner:given("^streaming config with non%-boolean enabled$", function(ctx)
+  ctx.validation_config = { streaming = { enabled = "yes" } }
+end)
+
+runner:given("^streaming config with non%-boolean enforce_mid_stream$", function(ctx)
+  ctx.validation_config = { streaming = { enforce_mid_stream = 1 } }
+end)
+
+runner:given("^streaming config with non%-boolean include_partial_usage$", function(ctx)
+  ctx.validation_config = { streaming = { include_partial_usage = "true" } }
+end)
+
+runner:given("^streaming config with invalid on_limit_exceeded$", function(ctx)
+  ctx.validation_config = { streaming = { on_limit_exceeded = "drop" } }
+end)
+
+runner:then_("^streaming config validation fails with enabled error$", function(ctx)
+  assert.is_nil(ctx.ok)
+  assert.matches("enabled must be a boolean", ctx.err)
+end)
+
+runner:then_("^streaming config validation fails with enforce_mid_stream error$", function(ctx)
+  assert.is_nil(ctx.ok)
+  assert.matches("enforce_mid_stream must be a boolean", ctx.err)
+end)
+
+runner:then_("^streaming config validation fails with include_partial_usage error$", function(ctx)
+  assert.is_nil(ctx.ok)
+  assert.matches("include_partial_usage must be a boolean", ctx.err)
+end)
+
+runner:then_("^streaming config validation fails with on_limit_exceeded error$", function(ctx)
+  assert.is_nil(ctx.ok)
+  assert.matches("on_limit_exceeded must be graceful_close or error_chunk", ctx.err)
+end)
+
+runner:then_("^is_streaming returns false for nil input$", function(ctx)
+  assert.is_false(streaming.is_streaming(nil))
+  assert.is_false(streaming.is_streaming(42))
+  assert.is_false(streaming.is_streaming("string"))
+end)
+
 runner:feature([[
 Feature: SSE streaming enforcement module behavior
   Rule: Streaming detection and config validation
@@ -466,4 +595,68 @@ Feature: SSE streaming enforcement module behavior
       When I run body_filter on a non-streaming request chunk
       Then non-streaming chunks pass through unchanged
       And reconcile is not called
+
+  Rule: validate_config type error branches (issue #25)
+    Scenario: validate_config rejects non-boolean enabled
+      Given the nginx mock environment is reset
+      And streaming config with non-boolean enabled
+      When I validate streaming config
+      Then streaming config validation fails with enabled error
+
+    Scenario: validate_config rejects non-boolean enforce_mid_stream
+      Given the nginx mock environment is reset
+      And streaming config with non-boolean enforce_mid_stream
+      When I validate streaming config
+      Then streaming config validation fails with enforce_mid_stream error
+
+    Scenario: validate_config rejects non-boolean include_partial_usage
+      Given the nginx mock environment is reset
+      And streaming config with non-boolean include_partial_usage
+      When I validate streaming config
+      Then streaming config validation fails with include_partial_usage error
+
+    Scenario: validate_config rejects invalid on_limit_exceeded value
+      Given the nginx mock environment is reset
+      And streaming config with invalid on_limit_exceeded
+      When I validate streaming config
+      Then streaming config validation fails with on_limit_exceeded error
+
+  Rule: is_streaming edge cases (issue #25)
+    Scenario: is_streaming returns false for non-table input
+      Given the nginx mock environment is reset
+      Then is_streaming returns false for nil input
+
+  Rule: body_filter truncated and buffer edge cases (issue #25)
+    Scenario: truncated stream swallows non-eof chunks
+      Given the nginx mock environment is reset
+      And a streaming context with max_completion_tokens 100 and buffer_tokens 100
+      And a streaming context is truncated
+      When I run body_filter with a non-eof chunk on the truncated stream
+      Then the truncated stream returns empty string
+      And reconcile is not called
+
+    Scenario: truncated stream triggers reconcile on eof
+      Given the nginx mock environment is reset
+      And a streaming context with max_completion_tokens 100 and buffer_tokens 100
+      And a streaming context is truncated
+      When I run body_filter with eof on the truncated stream
+      Then reconcile is called with actual total tokens 80
+
+    Scenario: empty data: event passes through with zero token contribution
+      Given the nginx mock environment is reset
+      And a streaming context with max_completion_tokens 200 and buffer_tokens 100
+      When I send an empty data-only SSE event
+      Then the empty data event passes through with zero tokens
+
+    Scenario: partial SSE fragment is flushed on eof
+      Given the nginx mock environment is reset
+      And a streaming context with leftover buffer data
+      When I run body_filter with partial SSE then eof
+      Then the partial buffer is flushed on eof
+
+    Scenario: termination event omits usage when include_partial_usage is false
+      Given the nginx mock environment is reset
+      And a streaming context with include_partial_usage disabled
+      When I run body_filter with two 60 token delta events in one chunk
+      Then the termination event has no usage field
 ]])

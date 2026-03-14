@@ -236,3 +236,74 @@ Feature: Policy bundle loader
       And current version is nil
       When I load the unsigned bundle
       Then the load fails with error "reset_circuit_breakers[1] must be a non-empty string"
+
+  Rule: Descriptor hints – ua key detection
+    Scenario: bundle with ua:bot limit key sets needs_user_agent hint
+      Given the bundle loader environment is reset
+      And a bundle with a ua descriptor limit key
+      And current version is nil
+      When I load the unsigned bundle
+      Then the load succeeds
+      And the compiled bundle descriptor hints needs_user_agent is true
+
+  Rule: HMAC fallback paths
+    Scenario: sha1 fallback HMAC is used when hmac_sha256 unavailable
+      Given the bundle loader environment is reset
+      And a valid sha1-signed bundle payload
+      And current version is nil
+      And ngx hmac_sha256 is unavailable
+      When I load the signed bundle
+      Then the load succeeds
+      And the compiled bundle has version 42 and non-nil hash
+
+    Scenario: load fails with hmac_sha256_unavailable when no HMAC available
+      Given the bundle loader environment is reset
+      And a valid signed bundle payload
+      And current version is nil
+      And ngx hmac_sha256 and hmac_sha1 are unavailable
+      When I load the signed bundle
+      Then the load fails with error "hmac_sha256_unavailable"
+
+  Rule: Compute hash fallbacks
+    Scenario: bundle loads successfully using md5 fallback hash
+      Given the bundle loader environment is reset
+      And ngx sha1_bin is unavailable
+      And a valid unsigned bundle payload
+      And current version is nil
+      When I load the unsigned bundle
+      Then the load succeeds
+      And the compiled bundle has version 42 and non-nil hash
+
+    Scenario: bundle loads successfully using pure length-prefix fallback hash
+      Given the bundle loader environment is reset
+      And ngx sha1_bin and md5 are unavailable
+      And a valid unsigned bundle payload
+      And current version is nil
+      When I load the unsigned bundle
+      Then the load succeeds
+      And the compiled bundle has version 42 and non-nil hash
+
+  Rule: Init hot reload without ngx.timer
+    Scenario: init_hot_reload returns error when ngx.timer is unavailable
+      Given the bundle loader environment is reset
+      And ngx timer is unavailable
+      When I initialize hot reload every 5 seconds
+      Then hot reload initialization fails with "ngx_timer_unavailable"
+
+  Rule: File loading edge cases
+    Scenario: load_from_file returns file_not_found for nonexistent path
+      Given the bundle loader environment is reset
+      And a nonexistent file path is set
+      And current version is nil
+      When I load from file
+      Then the load fails with error "file_not_found"
+
+  Rule: Saas client audit event on apply
+    Scenario: bundle activation queues a bundle_activated event to saas client
+      Given the bundle loader environment is reset
+      And the loader is initialized with a mock saas client
+      And a valid unsigned bundle payload
+      And current version is nil
+      When I load the unsigned bundle
+      And I apply the compiled bundle
+      Then the saas client received a bundle_activated event

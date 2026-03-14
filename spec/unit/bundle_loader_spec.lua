@@ -518,4 +518,94 @@ runner:given("^circuit breaker state for \"([^\"]+)\" is open in shared dict$", 
   ctx.env.dict:set(state_key, "open:12345")
 end)
 
+-- ============================================================
+-- Issue #25: targeted coverage additions for bundle_loader.lua
+-- ============================================================
+
+runner:given("^a bundle with a ua descriptor limit key$", function(ctx)
+  ctx.bundle = mock_bundle.new_bundle({
+    bundle_version = 42,
+    policies = {
+      {
+        id = "policy-ua-test",
+        spec = {
+          selector = { pathPrefix = "/v1/", methods = { "GET" } },
+          mode = "enforce",
+          rules = {
+            { name = "ua-rate", limit_keys = { "ua:bot" }, algorithm = "token_bucket",
+              algorithm_config = { tokens_per_second = 10, burst = 20 } },
+          },
+        },
+      },
+    },
+  })
+  ctx.payload = mock_bundle.encode(ctx.bundle)
+end)
+
+runner:given("^a valid sha1%-signed bundle payload$", function(ctx)
+  ctx.bundle = mock_bundle.new_bundle({ bundle_version = 42 })
+  local payload = mock_bundle.encode(ctx.bundle)
+  local raw_sig = _G.ngx.hmac_sha1(ctx.signing_key, payload)
+  ctx.signed_payload = _G.ngx.encode_base64(raw_sig) .. "\n" .. payload
+end)
+
+runner:given("^ngx hmac_sha256 is unavailable$", function(_ctx)
+  _G.ngx.hmac_sha256 = nil
+end)
+
+runner:given("^ngx hmac_sha256 and hmac_sha1 are unavailable$", function(_ctx)
+  _G.ngx.hmac_sha256 = nil
+  _G.ngx.hmac_sha1 = nil
+end)
+
+runner:given("^ngx sha1_bin is unavailable$", function(_ctx)
+  _G.ngx.sha1_bin = nil
+end)
+
+runner:given("^ngx sha1_bin and md5 are unavailable$", function(_ctx)
+  _G.ngx.sha1_bin = nil
+  _G.ngx.md5 = nil
+end)
+
+runner:given("^ngx timer is unavailable$", function(_ctx)
+  _G.ngx.timer = nil
+end)
+
+runner:given("^a nonexistent file path is set$", function(ctx)
+  ctx.file_path = "/tmp/__no_such_bundle_file_xyz_issue25__"
+end)
+
+runner:given("^the loader is initialized with a mock saas client$", function(ctx)
+  ctx.saas_events = {}
+  ctx.loader.init({
+    dict = ctx.env.dict,
+    saas_client = {
+      queue_event = function(event)
+        ctx.saas_events[#ctx.saas_events + 1] = event
+      end,
+    },
+  })
+end)
+
+runner:then_("^the compiled bundle descriptor hints needs_user_agent is true$", function(ctx)
+  assert.is_table(ctx.compiled.descriptor_hints)
+  assert.is_true(ctx.compiled.descriptor_hints.needs_user_agent)
+end)
+
+runner:then_("^hot reload initialization fails with \"([^\"]+)\"$", function(ctx, expected_err)
+  assert.is_nil(ctx.hot_reload_ok)
+  assert.equals(expected_err, ctx.hot_reload_err)
+end)
+
+runner:then_("^the saas client received a bundle_activated event$", function(ctx)
+  local found = false
+  for _, event in ipairs(ctx.saas_events or {}) do
+    if event.event_type == "bundle_activated" then
+      found = true
+      break
+    end
+  end
+  assert.is_true(found, "expected bundle_activated event in saas_events")
+end)
+
 runner:feature_file_relative("features/bundle_loader.feature")
