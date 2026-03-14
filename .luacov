@@ -1,0 +1,14 @@
+return {
+  include = {
+    "src/fairvisor/",
+  },
+  exclude = {
+    "spec/",
+    "tests/",
+    "cli/",
+    "bin/",
+    "src/nginx/",
+  },
+  statsfile = "artifacts/coverage/luacov.stats.out",
+  reportfile = "artifacts/coverage/luacov.report.out",
+}
