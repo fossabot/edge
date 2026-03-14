@@ -132,6 +132,24 @@ Feature: Rule evaluation engine orchestration
       And kill switch check was skipped
       And decision does not expose override headers
 
+  Rule: Circuit Breaker Cost Resolution
+    Scenario: AC-12 Circuit breaker uses LLM estimator for cost
+      Given the rule engine test environment is reset
+      And fixture policy with circuit breaker and token_bucket_llm rule
+      And the llm prompt estimate is 120
+      And the request context max_tokens is 300
+      When I evaluate the request
+      Then llm prompt estimation was called
+      And circuit breaker was checked with cost 420
+
+    Scenario: AC-12b Circuit breaker uses default_max_completion when max_tokens missing
+      Given the rule engine test environment is reset
+      And fixture policy with circuit breaker and token_bucket_llm rule
+      And the llm prompt estimate is 120
+      When I evaluate the request
+      Then llm prompt estimation was called
+      And circuit breaker was checked with cost 620
+
   Rule: Audit event emission
     Scenario: Decision events are emitted for every evaluation
       Given the rule engine test environment is reset

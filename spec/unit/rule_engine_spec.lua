@@ -195,15 +195,15 @@ local function _setup_engine(ctx)
   }
 
   local circuit_breaker = {
-    check = function(_dict, _config, _key, _cost, _now)
+    check = function(_dict, _config, _key, cost, _now)
       ctx.calls[#ctx.calls + 1] = "circuit_check"
+      ctx.last_circuit_cost = cost
       if ctx.circuit_tripped then
         return { tripped = true, retry_after = 30 }
       end
       return { tripped = false }
     end,
   }
-
   local kill_switch = {
     check = function(_kill_switches, _descriptors, _path, _now)
       ctx.calls[#ctx.calls + 1] = "kill_switch_check"
@@ -235,8 +235,14 @@ local function _setup_engine(ctx)
       ctx.calls[#ctx.calls + 1] = "llm_check"
       return { allowed = true }
     end,
+    estimate_prompt_tokens = function(_config, _request_context)
+      ctx.calls[#ctx.calls + 1] = "llm_estimate"
+      return ctx.llm_prompt_estimate or 0
+    end,
+    build_error_response = function(_reason, _extra)
+      return '{"error":"mock"}'
+    end,
   }
-
   local health = {
     inc = function(_self, name, labels, value)
       ctx.metrics[#ctx.metrics + 1] = {
@@ -552,10 +558,46 @@ runner:given("^fixture kill switch override skips kill switch$", function(ctx)
   ctx.rule_results.allow_rule = { allowed = true, limit = 100, remaining = 90, reset = 1 }
 end)
 
+runner:given("^the llm prompt estimate is (%d+)$", function(ctx, estimate)
+  ctx.llm_prompt_estimate = tonumber(estimate)
+end)
+
+runner:given("^the request context max_tokens is (%d+)$", function(ctx, max_tokens)
+  ctx.request_context.max_tokens = tonumber(max_tokens)
+end)
+
+runner:given("^fixture policy with circuit breaker and token_bucket_llm rule$", function(ctx)
+  ctx.matching_policy_ids = { "p_llm" }
+  ctx.request_context._descriptors["jwt:org_id"] = "org-llm"
+  ctx.bundle.policies_by_id.p_llm = {
+    id = "p_llm",
+    spec = {
+      mode = "enforce",
+      circuit_breaker = { enabled = true, threshold = 10, window_seconds = 60 },
+      rules = {
+        {
+          name = "llm_rule",
+          algorithm = "token_bucket_llm",
+          limit_keys = { "jwt:org_id" },
+          algorithm_config = { tokens_per_minute = 1000, default_max_completion = 500 }
+        }
+      }
+    }
+  }
+end)
+
+runner:then_("^llm prompt estimation was called$", function(ctx)
+  assert.is_true(_contains(ctx.calls, "llm_estimate"))
+end)
+
+runner:then_("^circuit breaker was checked with cost (%d+)$", function(ctx, expected_cost)
+  assert.is_true(_contains(ctx.calls, "circuit_check"))
+  assert.equals(tonumber(expected_cost), ctx.last_circuit_cost)
+end)
+
 runner:when("^I evaluate the request$", function(ctx)
   ctx.decision = ctx.engine.evaluate(ctx.request_context, ctx.bundle)
 end)
-
 runner:then_("^decision action is \"([^\"]+)\"$", function(ctx, action)
   assert.equals(action, ctx.decision.action)
 end)

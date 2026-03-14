@@ -64,6 +64,14 @@ runner:given("^the nginx integration mock environment is reset$", function(ctx)
   }
 end)
 
+runner:given("^stream limit behavior is error_chunk$", function(ctx)
+  ctx.config.streaming.on_limit_exceeded = "error_chunk"
+end)
+
+runner:given("^shadow mode is enabled for the request$", function(ctx)
+  ctx.reservation.is_shadow = true
+end)
+
 runner:when("^I initialize streaming for the request$", function(ctx)
   ctx.stream_ctx = streaming.init_stream(ctx.config, ctx.request_context, ctx.reservation)
 end)
@@ -89,11 +97,37 @@ runner:then_("^TK%-005 truncates with length finish reason and done marker$", fu
   assert.is_true(ctx.stream_ctx.truncated)
 end)
 
+runner:then_("^TK%-006 truncates with rate_limit_error and done marker$", function(ctx)
+  assert.matches('"type":"rate_limit_error"', ctx.out2)
+  assert.matches('data: %[DONE%]\n\n$', ctx.out2)
+  assert.is_true(ctx.stream_ctx.truncated)
+end)
+
+runner:then_("^TK%-007 passes through both chunks and reconciles later$", function(ctx)
+  assert.matches('^data: %{"choices":%[%{"delta":%{"content":"y+"%}%}%]%}%\n\n$', ctx.out1)
+  assert.matches('^data: %{"choices":%[%{"delta":%{"content":"y+"%}%}%]%}%\n\n$', ctx.out2)
+  assert.is_not_true(ctx.stream_ctx.truncated)
+  -- End the stream to check reconciliation
+  streaming.body_filter("data: [DONE]\n\n", false)
+  assert.equals(1, #reconcile_calls)
+  assert.equals(120 + ctx.reservation.prompt_tokens, reconcile_calls[1].actual_total)
+end)
+
 runner:then_("^TK%-004 completes stream and reconciles once$", function(ctx)
   assert.matches('^data: %{"choices":%[%{"delta":%{"content":"y+"%}%}%]%}%\n\n$', ctx.out1)
   assert.equals("data: [DONE]\n\n", ctx.out2)
   assert.equals(1, #reconcile_calls)
-  assert.equals(60, reconcile_calls[1].actual_total)
+  assert.equals(20 + ctx.reservation.prompt_tokens, reconcile_calls[1].actual_total)
+end)
+
+runner:given("^include_partial_usage is disabled for the stream$", function(ctx)
+  ctx.config.streaming.include_partial_usage = false
+end)
+
+runner:then_("^TK%-008 truncates without usage fragment$", function(ctx)
+  assert.matches('finish_reason":"length"', ctx.out2)
+  assert.not_matches('"usage":', ctx.out2)
+  assert.matches('data: %[DONE%]\n\n$', ctx.out2)
 end)
 
 runner:feature([[
@@ -110,4 +144,25 @@ Feature: Streaming enforcement integration flows
       When I initialize streaming for the request
       And I process two chunks with 60 and 60 completion tokens
       Then TK-005 truncates with length finish reason and done marker
+
+    Scenario: TK-006 Mid-Stream Truncation with Error Chunk
+      Given the nginx integration mock environment is reset
+      And stream limit behavior is error_chunk
+      When I initialize streaming for the request
+      And I process two chunks with 60 and 60 completion tokens
+      Then TK-006 truncates with rate_limit_error and done marker
+
+    Scenario: TK-007 Shadow Mode does not truncate
+      Given the nginx integration mock environment is reset
+      And shadow mode is enabled for the request
+      When I initialize streaming for the request
+      And I process two chunks with 60 and 60 completion tokens
+      Then TK-007 passes through both chunks and reconciles later
+
+    Scenario: TK-008 Truncation without partial usage
+      Given the nginx integration mock environment is reset
+      And include_partial_usage is disabled for the stream
+      When I initialize streaming for the request
+      And I process two chunks with 60 and 60 completion tokens
+      Then TK-008 truncates without usage fragment
 ]])

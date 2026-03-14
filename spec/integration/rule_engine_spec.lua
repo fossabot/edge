@@ -217,8 +217,22 @@ local function _setup_full_chain(ctx)
   local health = require("fairvisor.health")
   ctx.loader = loader
   ctx.health = health
+
+  -- Mock saas_client that can be toggled to fail
+  ctx.saas_client = {
+    queue_event = function(event)
+      ctx.saas_event_attempts = (ctx.saas_event_attempts or 0) + 1
+      if ctx.saas_unreachable then
+        return nil, "SaaS is unreachable"
+      end
+      ctx.queued_events = ctx.queued_events or {}
+      ctx.queued_events[#ctx.queued_events + 1] = event
+      return true
+    end
+  }
+
   ctx.engine = require("fairvisor.rule_engine")
-  ctx.engine.init({ dict = ctx.dict })
+  ctx.engine.init({ dict = ctx.dict, health = ctx.health, saas_client = ctx.saas_client })
 end
 
 runner:given("^the full chain integration is reset with real bundle_loader and token_bucket$", function(ctx)
@@ -422,6 +436,10 @@ runner:then_("^integration decision is allow all rules passed$", function(ctx)
   assert.equals("all_rules_passed", ctx.decision.reason)
 end)
 
+runner:then_("^integration decision is allow$", function(ctx)
+  assert.equals("allow", ctx.decision.action)
+end)
+
 runner:then_("^missing descriptor log was emitted$", function(ctx)
   local found = false
   for i = 1, #ctx.logs do
@@ -457,6 +475,221 @@ runner:then_("^loop short%-circuited circuit and limiter checks$", function(ctx)
     assert.is_nil(string.match(ctx.calls[i], "^tb_check:"))
   end
   assert.is_true(saw_loop)
+end)
+
+runner:given("^a real bundle with token_bucket_llm rule and header_hint estimator is loaded$", function(ctx)
+  local bundle = mock_bundle.new_bundle({
+    bundle_version = 102,
+    policies = {
+      {
+        id = "p_llm",
+        spec = {
+          selector = { pathPrefix = "/v1/", methods = { "POST" } },
+          mode = "enforce",
+          circuit_breaker = {
+            enabled = true,
+            spend_rate_threshold_per_minute = 10000,
+            window_seconds = 60
+          },
+          rules = {
+            {
+              name = "r_llm",
+              limit_keys = { "jwt:org_id" },
+              algorithm = "token_bucket_llm",
+              algorithm_config = {
+                tokens_per_minute = 10000,
+                default_max_completion = 1000,
+                token_source = { estimator = "header_hint" }
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+  local payload = mock_bundle.encode(bundle)
+  local compiled, err = ctx.loader.load_from_string(payload, nil, nil)
+  assert.is_table(compiled, tostring(err))
+  local ok, apply_err = ctx.loader.apply(compiled)
+  assert.is_true(ok, tostring(apply_err))
+  ctx.bundle = ctx.loader.get_current()
+
+  -- Mock circuit_breaker to record calls
+  local real_cb = require("fairvisor.circuit_breaker")
+  ctx.circuit_calls = {}
+  package.loaded["fairvisor.circuit_breaker"] = {
+    check = function(dict, config, key, cost, now)
+      ctx.circuit_calls[#ctx.circuit_calls + 1] = { key = key, cost = cost }
+      return real_cb.check(dict, config, key, cost, now)
+    end,
+  }
+  -- Reload rule_engine to use mocked circuit_breaker
+  package.loaded["fairvisor.rule_engine"] = nil
+  ctx.engine = require("fairvisor.rule_engine")
+  ctx.engine.init({ dict = ctx.dict })
+end)
+
+runner:given("^request context has header X%-Token%-Estimate (%d+)$", function(ctx, estimate)
+  ctx.request_context.headers["X-Token-Estimate"] = tostring(estimate)
+end)
+
+runner:then_("^circuit breaker was checked with cost (%d+)$", function(ctx, expected_cost)
+  local found = false
+  for i = 1, #ctx.circuit_calls do
+    if ctx.circuit_calls[i].cost == tonumber(expected_cost) then
+      found = true
+      break
+    end
+  end
+  assert.is_true(found, "Circuit breaker should be called with cost " .. expected_cost)
+end)
+
+runner:given("^a real bundle is loaded and applied$", function(ctx)
+  local bundle = mock_bundle.new_bundle({ bundle_version = 103 })
+  local payload = mock_bundle.encode(bundle)
+  local compiled, _ = ctx.loader.load_from_string(payload, nil, nil)
+  ctx.loader.apply(compiled)
+  ctx.bundle = ctx.loader.get_current()
+end)
+
+runner:given("^SaaS client is configured but unreachable$", function(ctx)
+  ctx.saas_unreachable = true
+end)
+
+runner:then_("^saas queue_event was attempted but did not block the decision$", function(ctx)
+  -- queue_event was called (reject path always audits) and failed, but decision was still returned
+  assert.is_true((ctx.saas_event_attempts or 0) > 0, "saas queue_event should have been attempted")
+  assert.is_table(ctx.decision)
+  assert.is_nil(ctx.decision.error)
+end)
+
+runner:given("^a real bundle with token_bucket_llm rule and TPM (%d+) is loaded$", function(ctx, tpm)
+  local bundle = mock_bundle.new_bundle({
+    bundle_version = 104,
+    policies = {
+      {
+        id = "p_tpm",
+        spec = {
+          selector = { pathPrefix = "/v1/", methods = { "POST" } },
+          mode = "enforce",
+          rules = {
+            {
+              name = "r_tpm",
+              limit_keys = { "jwt:org_id" },
+              algorithm = "token_bucket_llm",
+              algorithm_config = {
+                tokens_per_minute = tonumber(tpm),
+                default_max_completion = 100,
+                token_source = { estimator = "header_hint" }
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+  local payload = mock_bundle.encode(bundle)
+  local compiled, _ = ctx.loader.load_from_string(payload, nil, nil)
+  ctx.loader.apply(compiled)
+  ctx.bundle = ctx.loader.get_current()
+end)
+
+runner:then_('^integration decision is reject with reason "([^"]+)"$', function(ctx, reason)
+  assert.equals("reject", ctx.decision.action)
+  assert.equals(reason, ctx.decision.reason)
+end)
+
+runner:then_('^decision headers include "([^"]+)" with value "([^"]+)"$', function(ctx, name, value)
+  assert.equals(value, ctx.decision.headers[name])
+end)
+
+runner:then_('^decision headers include "([^"]+)"$', function(ctx, name)
+  assert.is_not_nil(ctx.decision.headers[name])
+end)
+
+runner:then_('^decision headers include "([^"]+)" matching pattern (.+)$', function(ctx, name, pattern)
+  assert.is_not_nil(ctx.decision.headers[name])
+  assert.matches(pattern, ctx.decision.headers[name])
+end)
+
+runner:given("^a real bundle with token_bucket_llm rule in shadow mode is loaded$", function(ctx)
+  local bundle = mock_bundle.new_bundle({
+    bundle_version = 105,
+    policies = {
+      {
+        id = "p_shadow",
+        spec = {
+          selector = { pathPrefix = "/v1/", methods = { "POST" } },
+          mode = "shadow",
+          rules = {
+            {
+              name = "r_shadow",
+              limit_keys = { "jwt:org_id" },
+              algorithm = "token_bucket_llm",
+              algorithm_config = {
+                tokens_per_minute = 1000,
+                default_max_completion = 100,
+                token_source = { estimator = "header_hint" }
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+  local payload = mock_bundle.encode(bundle)
+  local compiled, _ = ctx.loader.load_from_string(payload, nil, nil)
+  ctx.loader.apply(compiled)
+  ctx.bundle = ctx.loader.get_current()
+end)
+
+runner:then_('^integration decision mode is "([^"]+)"$', function(ctx, mode)
+  assert.equals(mode, ctx.decision.mode)
+end)
+
+runner:then_("^would_reject is true$", function(ctx)
+  assert.is_true(ctx.decision.would_reject)
+end)
+
+runner:given("^a real bundle with token_bucket_llm rule and TPM 0 is loaded$", function(ctx)
+  local bundle = mock_bundle.new_bundle({
+    bundle_version = 106,
+    policies = {
+      {
+        id = "p_bot",
+        spec = {
+          selector = { pathPrefix = "/v1/", methods = { "POST" } },
+          mode = "enforce",
+          rules = {
+            {
+              name = "bot_rule",
+              limit_keys = { "jwt:org_id" },
+              algorithm = "token_bucket_llm",
+              algorithm_config = {
+                tokens_per_minute = 0,
+                burst_tokens = 0,
+                default_max_completion = 100,
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+  local payload = mock_bundle.encode(bundle)
+  local compiled, _ = ctx.loader.load_from_string(payload, nil, nil)
+  ctx.loader.apply(compiled)
+  ctx.bundle = ctx.loader.get_current()
+end)
+
+runner:given("^request context is path /v1/chat with jwt org_id bot%-org$", function(ctx)
+  ctx.request_context = {
+    method = "POST",
+    path = "/v1/chat",
+    headers = {},
+    query_params = {},
+    jwt_claims = { org_id = "bot-org" },
+  }
 end)
 
 runner:feature_file_relative("features/rule_engine.feature")

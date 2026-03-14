@@ -19,6 +19,8 @@ EDGE_NOBUNDLE_URL = os.environ.get("FAIRVISOR_E2E_NOBUNDLE_URL", "http://localho
 EDGE_REVERSE_URL = os.environ.get("FAIRVISOR_E2E_REVERSE_URL", "http://localhost:18085")
 EDGE_ASN_URL = os.environ.get("FAIRVISOR_E2E_ASN_URL", "http://localhost:18087")
 EDGE_LLM_RECONCILE_URL = os.environ.get("FAIRVISOR_E2E_LLM_RECONCILE_URL", "http://localhost:18088")
+EDGE_LLM_OPENAI_CONTRACT_URL = os.environ.get("FAIRVISOR_E2E_LLM_OPENAI_CONTRACT_URL", "http://localhost:18089")
+EDGE_LLM_STREAMING_URL = os.environ.get("FAIRVISOR_E2E_LLM_STREAMING_URL", "http://localhost:18090")
 HEALTH_TIMEOUT_S = float(os.environ.get("FAIRVISOR_E2E_HEALTH_TIMEOUT", "15"))
 COMPOSE_FILE = os.path.join(os.path.dirname(__file__), "docker-compose.test.yml")
 
@@ -180,4 +182,30 @@ def edge_llm_reconcile_base_url():
     pytest.skip(
         "Edge LLM reconcile container not ready at {}. Run: docker compose -f tests/e2e/docker-compose.test.yml up -d".format(url)
     )
+
+
+@pytest.fixture(scope="session")
+def edge_llm_openai_contract_base_url():
+    """Base URL of the LLM OpenAI contract container (decision_service, header_hint estimator, low TPM).
+    Tests that tpm_exceeded rejection produces an OpenAI-compatible JSON error body."""
+    url = EDGE_LLM_OPENAI_CONTRACT_URL
+    ready, _ = _wait_ready(url, HEALTH_TIMEOUT_S)
+    if not ready:
+        pytest.skip(
+            "Edge LLM OpenAI contract container not ready at {}. Run: docker compose -f tests/e2e/docker-compose.test.yml up -d".format(url)
+        )
+    return url
+
+
+@pytest.fixture(scope="session")
+def edge_llm_streaming_base_url():
+    """Base URL of the LLM streaming container (reverse_proxy + mock SSE backend, max_completion_tokens=10).
+    Tests mid-stream truncation at the edge body_filter layer."""
+    url = EDGE_LLM_STREAMING_URL
+    ready, _ = _wait_ready(url, HEALTH_TIMEOUT_S)
+    if not ready:
+        pytest.skip(
+            "Edge LLM streaming container not ready at {}. Run: docker compose -f tests/e2e/docker-compose.test.yml up -d".format(url)
+        )
+    return url
 

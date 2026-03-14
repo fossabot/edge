@@ -21,6 +21,7 @@ local os_time = os.time
 local utils = require("fairvisor.utils")
 local json_lib = utils.get_json()
 local streaming = require("fairvisor.streaming")
+local llm_limiter = require("fairvisor.llm_limiter")
 
 local _M = {}
 
@@ -913,6 +914,12 @@ function _M.access_handler()
     _maybe_emit_retry_after_metric(reject_headers["Retry-After"])
     _set_response_headers(reject_headers)
     ngx.status = HTTP_TOO_MANY_REQUESTS
+    local reason = decision.reason or ""
+    if reason == "tpm_exceeded" or reason == "tpd_exceeded"
+        or reason == "prompt_tokens_exceeded" or reason == "max_tokens_per_request_exceeded" then
+      ngx.header["Content-Type"] = "application/json"
+      ngx.say(llm_limiter.build_error_response(reason))
+    end
     return ngx.exit(HTTP_TOO_MANY_REQUESTS)
   end
 

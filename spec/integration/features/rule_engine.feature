@@ -53,3 +53,52 @@ Feature: Rule engine golden integration behavior
       And request context is path /v1/chat with jwt org_id org-1 and no precomputed descriptors
       When I run rule engine evaluation
       Then integration decision is reject with reason kill_switch
+
+  Rule: Issue #4 regression and P0 coverage
+    Scenario: header_hint estimator works in full integration for Circuit Breaker
+      Given the full chain integration is reset with real bundle_loader and token_bucket
+      And a real bundle with token_bucket_llm rule and header_hint estimator is loaded
+      And request context is path /v1/chat with jwt org_id org-1
+      And request context has header X-Token-Estimate 5000
+      When I run rule engine evaluation
+      Then integration decision is allow all rules passed
+      And circuit breaker was checked with cost 6000
+
+    Scenario: UC-09 SaaS Unavailable - Edge enforces policy even when audit event queue fails
+      # Uses a reject decision (tpm_exceeded) so queue_event IS called, proving
+      # that a saas_client failure does not block or corrupt the enforcement decision.
+      Given the full chain integration is reset with real bundle_loader and token_bucket
+      And a real bundle with token_bucket_llm rule and TPM 1000 is loaded
+      And SaaS client is configured but unreachable
+      And request context is path /v1/chat with jwt org_id org-1
+      And request context has header X-Token-Estimate 1500
+      When I run rule engine evaluation
+      Then integration decision is reject with reason "tpm_exceeded"
+      And saas queue_event was attempted but did not block the decision
+
+    Scenario: UC-16 OpenAI-compatible rate limiting headers
+      # Tests rule_engine decision.headers output (pre-HTTP layer).
+      # X-Fairvisor-Reason is stripped by decision_api in non-debug mode — see decision_api_spec.lua:519.
+      Given the full chain integration is reset with real bundle_loader and token_bucket
+      And a real bundle with token_bucket_llm rule and TPM 1000 is loaded
+      And request context is path /v1/chat with jwt org_id org-1
+      And request context has header X-Token-Estimate 1500
+      When I run rule engine evaluation
+      Then integration decision is reject with reason "tpm_exceeded"
+      And decision headers include "X-Fairvisor-Reason" with value "tpm_exceeded"
+      And decision headers include "Retry-After"
+      And decision headers include "RateLimit-Limit" with value "1000"
+      And decision headers include "RateLimit-Remaining" with value "0"
+      And decision headers include "RateLimit-Reset"
+      And decision headers include "RateLimit" matching pattern p_tpm.*;r=0;t=%d+
+
+    Scenario: UC-18 Token usage shadow mode
+      Given the full chain integration is reset with real bundle_loader and token_bucket
+      And a real bundle with token_bucket_llm rule in shadow mode is loaded
+      And request context is path /v1/chat with jwt org_id org-1
+      And request context has header X-Token-Estimate 15000
+      When I run rule engine evaluation
+      Then integration decision is allow
+      And integration decision mode is "shadow"
+      And would_reject is true
+

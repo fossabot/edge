@@ -18,4 +18,6 @@ pytest -v \
   tests/e2e/test_health.py \
   tests/e2e/test_decision_api.py \
   tests/e2e/test_metrics.py \
+  tests/e2e/test_llm_openai_contract.py \
+  tests/e2e/test_llm_streaming.py \
   --junitxml="${ARTIFACTS_DIR}/junit.xml"

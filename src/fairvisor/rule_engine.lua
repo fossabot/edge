@@ -266,7 +266,12 @@ local function _resolve_request_cost(policy, request_context)
   end
 
   if rule.algorithm == "token_bucket_llm" then
-    return request_context and request_context.max_tokens or 1
+    local prompt = _call(_llm_limiter.estimate_prompt_tokens, 0, config, request_context)
+    local max_completion = config.default_max_completion or 1000
+    if request_context and type(request_context.max_tokens) == "number" and request_context.max_tokens > 0 then
+      max_completion = request_context.max_tokens
+    end
+    return prompt + max_completion
   end
 
   return 1

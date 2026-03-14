@@ -45,6 +45,8 @@ local RESULT_FIELDS = {
   "remaining_tpd",
   "limit_tpm",
   "limit_tpd",
+  "limit",
+  "remaining",
 }
 
 local _result = {}
@@ -382,6 +384,8 @@ function _M.check(dict, key, config, request_context, now)
     local result = _set_reject("tpm_exceeded")
     result.remaining_tokens = tpm_result.remaining
     result.limit_tokens = config.tokens_per_minute
+    result.remaining = tpm_result.remaining
+    result.limit = config.tokens_per_minute
     result.retry_after = tpm_result.retry_after
     result.estimated_total = estimated_total
     return result
@@ -396,6 +400,8 @@ function _M.check(dict, key, config, request_context, now)
       local result = _set_reject("tpd_exceeded")
       result.remaining_tokens = tpd_result.remaining
       result.limit_tokens = config.tokens_per_day
+      result.remaining = tpd_result.remaining
+      result.limit = config.tokens_per_day
       result.retry_after = tpd_result.retry_after
       result.estimated_total = estimated_total
       return result
@@ -411,6 +417,8 @@ function _M.check(dict, key, config, request_context, now)
   _result.remaining_tpd = tpd_result and tpd_result.remaining or nil
   _result.limit_tpm = config.tokens_per_minute
   _result.limit_tpd = config.tokens_per_day
+  _result.remaining = tpm_result.remaining
+  _result.limit = config.tokens_per_minute
   return _result
 end
 

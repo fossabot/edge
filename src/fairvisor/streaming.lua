@@ -421,7 +421,7 @@ function _M.body_filter(chunk, eof)
           stream_ctx.truncated = true
           _reconcile_once(stream_ctx)
           _maybe_emit_cutoff_event(stream_ctx)
-          return _build_termination(stream_ctx)
+          return table_concat(out) .. _build_termination(stream_ctx)
         end
       end
     end

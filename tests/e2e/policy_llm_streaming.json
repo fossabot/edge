@@ -1,0 +1,39 @@
+{
+  "bundle_version": 1,
+  "issued_at": "2026-01-01T00:00:00Z",
+  "expires_at": "2030-01-01T00:00:00Z",
+  "defaults": {
+    "max_completion_tokens": 10,
+    "streaming": {
+      "enabled": true,
+      "enforce_mid_stream": true,
+      "buffer_tokens": 1,
+      "on_limit_exceeded": "graceful_close"
+    }
+  },
+  "policies": [
+    {
+      "id": "llm-streaming-policy",
+      "spec": {
+        "selector": {
+          "pathPrefix": "/"
+        },
+        "mode": "enforce",
+        "rules": [
+          {
+            "name": "llm-streaming-rule",
+            "limit_keys": [
+              "header:x-e2e-key"
+            ],
+            "algorithm": "token_bucket_llm",
+            "algorithm_config": {
+              "tokens_per_minute": 100000,
+              "burst_tokens": 100000,
+              "default_max_completion": 1000
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

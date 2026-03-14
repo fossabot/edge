@@ -201,3 +201,61 @@ services:
       timeout: 2s
       retries: 10
       start_period: 5s
+
+  edge_llm_openai_contract:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "18089:8080"
+    environment:
+      FAIRVISOR_CONFIG_FILE: /etc/fairvisor/policy.json
+      FAIRVISOR_SHARED_DICT_SIZE: 4m
+      FAIRVISOR_LOG_LEVEL: info
+      FAIRVISOR_MODE: decision_service
+      FAIRVISOR_WORKER_PROCESSES: "1"
+    volumes:
+      - ./policy_llm_openai_contract.json:/etc/fairvisor/policy.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
+
+  mock_streaming_backend:
+    image: python:3.12-alpine
+    volumes:
+      - ./mock-streaming-server.py:/mock-streaming-server.py:ro
+    command: ["python3", "/mock-streaming-server.py"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:80/"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
+
+  edge_llm_streaming:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "18090:8080"
+    environment:
+      FAIRVISOR_CONFIG_FILE: /etc/fairvisor/policy.json
+      FAIRVISOR_SHARED_DICT_SIZE: 4m
+      FAIRVISOR_LOG_LEVEL: info
+      FAIRVISOR_MODE: reverse_proxy
+      FAIRVISOR_BACKEND_URL: http://mock_streaming_backend:80
+      FAIRVISOR_WORKER_PROCESSES: "1"
+    volumes:
+      - ./policy_llm_streaming.json:/etc/fairvisor/policy.json:ro
+    depends_on:
+      mock_streaming_backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
