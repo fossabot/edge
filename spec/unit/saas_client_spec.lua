@@ -547,4 +547,77 @@ runner:then_("^no heartbeat request was made$", function(ctx)
   assert.is_true(true)
 end)
 
+-- ============================================================
+-- Issue #34: transport/retry/unhappy-path coverage additions
+-- ============================================================
+
+runner:given("^heartbeat fails with transport error$", function(ctx)
+  ctx.http.queue_response("POST", ctx.config.saas_url .. "/api/v1/edge/heartbeat", nil, "connection refused")
+end)
+
+runner:given("^heartbeat fails with transport error (%d+) times$", function(ctx, count)
+  for _ = 1, tonumber(count) do
+    ctx.http.queue_response("POST", ctx.config.saas_url .. "/api/v1/edge/heartbeat", nil, "connection refused")
+  end
+end)
+
+runner:given("^events endpoint fails with transport error$", function(ctx)
+  ctx.http.queue_response("POST", ctx.config.saas_url .. "/api/v1/edge/events", nil, "connection refused")
+end)
+
+runner:given("^config pull fails with transport error$", function(ctx)
+  ctx.http.queue_response("GET", ctx.config.saas_url .. "/api/v1/edge/config", nil, "connection refused")
+end)
+
+runner:given("^config pull returns non%-retriable status (%d+)$", function(ctx, status)
+  ctx.http.queue_response("GET", ctx.config.saas_url .. "/api/v1/edge/config", { status = tonumber(status) })
+end)
+
+runner:given("^config ack fails with transport error$", function(ctx)
+  ctx.http.queue_response("POST", ctx.config.saas_url .. "/api/v1/edge/config/ack", nil, "connection refused")
+end)
+
+runner:given("^registration fails with http status (%d+)$", function(ctx, status)
+  ctx.http.queue_response("POST", ctx.config.saas_url .. "/api/v1/edge/register", { status = tonumber(status) })
+end)
+
+runner:then_("^the events endpoint was called (%d+) times$", function(ctx, n)
+  local count = 0
+  for _, request in ipairs(ctx.http.requests) do
+    if request.url == ctx.config.saas_url .. "/api/v1/edge/events" then
+      count = count + 1
+    end
+  end
+  assert.equals(tonumber(n), count)
+end)
+
+runner:then_("^force flush returns (%d+) events$", function(ctx, n)
+  assert.equals(tonumber(n), ctx.flushed)
+end)
+
+runner:then_("^the bundle was applied (%d+) times?$", function(ctx, n)
+  assert.equals(tonumber(n), #ctx.bundle_state.apply_calls)
+end)
+
+runner:then_("^no bundle was applied$", function(ctx)
+  assert.equals(0, #ctx.bundle_state.apply_calls)
+end)
+
+runner:then_("^the config pull endpoint was called$", function(ctx)
+  local found = false
+  for _, request in ipairs(ctx.http.requests) do
+    if request.method == "GET" and request.url == ctx.config.saas_url .. "/api/v1/edge/config" then
+      found = true
+      break
+    end
+  end
+  assert.is_true(found)
+end)
+
+runner:then_("^queue_event with non%-table argument returns error$", function(_)
+  local ok, err = saas_client.queue_event("not a table")
+  assert.is_nil(ok)
+  assert.equals("event must be a table", err)
+end)
+
 runner:feature_file_relative("features/saas_client.feature")

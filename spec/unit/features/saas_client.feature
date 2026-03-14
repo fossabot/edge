@@ -245,3 +245,136 @@ Feature: SaaS protocol client unit behavior
       And the client is initialized
       When the heartbeat timer callback runs with premature true
       Then no heartbeat request was made
+
+  Rule: Transport error paths
+    Scenario: event flush transport error counts as error metric
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And events endpoint fails with transport error
+      And the client is initialized
+      And I queue events with ids: 1
+      When the event flush timer callback runs
+      Then events_sent_total has one error increment
+
+    Scenario: heartbeat transport errors open circuit after threshold
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And config poll interval is 999999 seconds
+      And heartbeat fails with transport error 5 times
+      And the client is initialized
+      When the heartbeat timer callback runs 5 times
+      Then the circuit state becomes disconnected
+
+    Scenario: config pull transport error does not apply bundle
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And config poll interval is 999999 seconds
+      And heartbeat succeeds with config update available
+      And config pull fails with transport error
+      And the client is initialized
+      When the heartbeat timer callback runs
+      Then no bundle was applied
+
+    Scenario: config ack transport error does not prevent bundle from being applied
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And bundle_loader starts with hash "base-hash" and version "v1"
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And config poll interval is 999999 seconds
+      And heartbeat succeeds with config update available
+      And config pull returns 200 with bundle hash "hash-new" and version "v2"
+      And config ack fails with transport error
+      And the client is initialized
+      When the heartbeat timer callback runs
+      Then the bundle was applied 1 times
+
+  Rule: Register error statuses
+    Scenario: register non-retriable 401 status fails initialization
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration fails with http status 401
+      When the client is initialized
+      Then initialization fails
+      And queue_event returns not initialized error
+
+    Scenario: register retriable 503 status fails initialization
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration fails with http status 503
+      When the client is initialized
+      Then initialization fails
+
+  Rule: Event flush retry and circuit guard
+    Scenario: event flush backoff suppresses immediate retry after 500 failure
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And events endpoint fails with status 500
+      And events endpoint accepts one batch
+      And the client is initialized
+      And I queue events with ids: 1
+      When I force flush events
+      Then the events endpoint was called 1 times
+      Given time advances by 3 seconds
+      When I force flush events
+      Then the events endpoint was called 2 times
+
+    Scenario: flush returns 0 when circuit is open before half-open window
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And config poll interval is 999999 seconds
+      And heartbeat fails with transport error 5 times
+      And the client is initialized
+      And I queue events with ids: 1
+      When the heartbeat timer callback runs 5 times
+      Then the circuit state becomes disconnected
+      When I force flush events
+      Then force flush returns 0 events
+
+  Rule: Config pull non-retriable status
+    Scenario: config pull non-retriable 403 does not apply bundle
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And config poll interval is 999999 seconds
+      And heartbeat succeeds with config update available
+      And config pull returns non-retriable status 403
+      And the client is initialized
+      When the heartbeat timer callback runs
+      Then no bundle was applied
+
+  Rule: queue_event input validation
+    Scenario: queue_event with non-table argument returns validation error
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And the client is initialized
+      Then queue_event with non-table argument returns error
+
+  Rule: Heartbeat periodic config poll
+    Scenario: heartbeat triggers periodic config pull when poll interval has elapsed
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And config poll interval is 1 seconds
+      And the client is initialized
+      Given time advances by 2 seconds
+      And heartbeat succeeds with no update and server time skew of 0 seconds
+      And config pull returns 304
+      When the heartbeat timer callback runs
+      Then the config pull endpoint was called
