@@ -114,6 +114,14 @@ runner:given("^the decision api dependencies are initialized$", function(ctx)
     ngx.log_calls[#ngx.log_calls + 1] = { level = level, args = { ... } }
   end
 
+  ngx.timer_calls = {}
+  ngx.timer = {
+    every = function(interval, callback)
+      ngx.timer_calls[#ngx.timer_calls + 1] = { interval = interval, callback = callback }
+      return true
+    end
+  }
+
   ctx.bundle = { id = "bundle-1" }
 
   ctx.bundle_loader = {
@@ -146,6 +154,17 @@ runner:given("^the decision api dependencies are initialized$", function(ctx)
 
   ctx.env_overrides = {}
   ctx.original_getenv = os.getenv
+
+  -- Mock GeoIP databases for reload test
+  ctx.test_cleanup_files = ctx.test_cleanup_files or {}
+  os.execute("mkdir -p data/geoip2")
+  local country_db = "data/geoip2/GeoLite2-Country.mmdb"
+  local f = io.open(country_db, "wb")
+  if f then
+    f:write("dummy")
+    f:close()
+    ctx.test_cleanup_files[#ctx.test_cleanup_files + 1] = country_db
+  end
 end)
 
 runner:given('^the mode is "([^"]+)"$', function(ctx, mode)
@@ -164,6 +183,7 @@ runner:given('^the mode is "([^"]+)"$', function(ctx, mode)
 
   assert.is_true(ok)
   assert.is_nil(err)
+  ctx.decision_api_initted = true
 end)
 
 runner:given('^the mode is "([^"]+)" and retry jitter is "([^"]+)"$', function(ctx, mode, _jitter)
@@ -179,6 +199,7 @@ runner:given('^the mode is "([^"]+)" and retry jitter is "([^"]+)"$', function(c
   })
   assert.is_true(ok)
   assert.is_nil(err)
+  ctx.decision_api_initted = true
 end)
 
 runner:given('^headers include "([^"]+)" as "([^"]+)"$', function(_, name, value)
@@ -377,7 +398,29 @@ runner:then_('^request context body_hash is nil$', function(ctx)
   assert.is_nil(ctx.request_context.body_hash)
 end)
 
+runner:then_("^geoip hot%-reload timer is scheduled for 24 hours$", function(_)
+  local found = false
+  local intervals = {}
+  for _, t in ipairs(ngx.timer_calls or {}) do
+    intervals[#intervals + 1] = t.interval
+    if t.interval == 86400 then
+      found = true
+      break
+    end
+  end
+  assert.is_true(found, "GeoIP reload timer (86400) not found in: " .. table.concat(intervals, ", "))
+end)
+
 runner:when("^I build request context$", function(ctx)
+  -- Ensure init is called with default mocks if not already done via "the mode is..."
+  if not ctx.decision_api_initted then
+    decision_api.init({
+      bundle_loader = ctx.bundle_loader,
+      rule_engine = ctx.rule_engine,
+      health = ctx.health,
+    })
+    ctx.decision_api_initted = true
+  end
   ctx.request_context = decision_api.build_request_context()
 end)
 

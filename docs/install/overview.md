@@ -35,7 +35,7 @@ Mount the directory containing the `.mmdb` files to `/etc/geoip2` in the Fairvis
 docker run -v /path/to/geoip-dbs:/etc/geoip2 ... ghcr.io/fairvisor/fairvisor-edge
 ```
 
-The runtime will automatically detect the databases and reload them every 24 hours.
+The runtime will automatically detect the databases on startup and reload them every 24 hours.
 
 ### 3. Verification
-If the databases are missing, Nginx will fail to start. Ensure the worker process has read permissions for these files.
+Fairvisor uses a Lua-based reader for MMDB files. If the databases are missing or unreadable, a warning will be logged in OpenResty's error log, and GeoIP/ASN lookups will gracefully fall back to headers or return `nil`.

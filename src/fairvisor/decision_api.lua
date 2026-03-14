@@ -785,6 +785,41 @@ local function _inject_debug_headers(headers, decision)
 
   return headers
 end
+local function _reload_geoip(geoip)
+  if not geoip then return end
+
+  local country_paths = { "/etc/geoip2/GeoLite2-Country.mmdb", "data/geoip2/GeoLite2-Country.mmdb" }
+  local asn_paths = { "/etc/geoip2/GeoLite2-ASN.mmdb", "data/geoip2/GeoLite2-ASN.mmdb" }
+
+  local dbs = {}
+  for _, path in ipairs(country_paths) do
+    local f = io.open(path, "rb")
+    if f then
+      f:close()
+      dbs.country = path
+      break
+    end
+  end
+
+  for _, path in ipairs(asn_paths) do
+    local f = io.open(path, "rb")
+    if f then
+      f:close()
+      dbs.asn = path
+      break
+    end
+  end
+
+  if dbs.country or dbs.asn then
+    _log_info("geoip_init_attempting databases_present")
+    local ok, err = pcall(geoip.init, dbs)
+    if not ok then
+      _log_err("geoip_init_failed err=", err)
+    else
+      _log_info("geoip_databases_loaded country=", tostring(dbs.country ~= nil), " asn=", tostring(dbs.asn ~= nil))
+    end
+  end
+end
 
 function _M.init(deps)
   if type(deps) ~= "table" then
@@ -811,26 +846,16 @@ function _M.init(deps)
   local geoip_ok, geoip = pcall(require, "resty.maxminddb")
   if geoip_ok then
     _deps.geoip = geoip
-    local country_db = "/etc/geoip2/GeoLite2-Country.mmdb"
-    local asn_db = "/etc/geoip2/GeoLite2-ASN.mmdb"
+    _reload_geoip(geoip)
 
-    local dbs = {}
-    local f_country = io.open(country_db, "rb")
-    if f_country then
-      f_country:close()
-      dbs.country = country_db
-    end
-
-    local f_asn = io.open(asn_db, "rb")
-    if f_asn then
-      f_asn:close()
-      dbs.asn = asn_db
-    end
-
-    if dbs.country or dbs.asn then
-      local ok, err = pcall(geoip.init, dbs)
+    -- Hot-reload GeoIP databases every 24 hours as required by issue #15
+    if ngx.timer and ngx.timer.every then
+      local ok, err = ngx.timer.every(86400, function(premature)
+        if premature then return end
+        _reload_geoip(geoip)
+      end)
       if not ok then
-        _log_err("geoip_init_failed err=", err)
+        _log_err("geoip_reload_timer_failed err=", err)
       end
     end
   end

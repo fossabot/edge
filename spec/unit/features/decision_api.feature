@@ -109,6 +109,12 @@ Feature: Decision API unit behavior
       And request context body_hash is nil
       And the test cleanup restores globals
 
+    Scenario: BUG-15 geoip hot-reload timer is scheduled
+      Given the decision api dependencies are initialized
+      When I build request context
+      Then geoip hot-reload timer is scheduled for 24 hours
+      And the test cleanup restores globals
+
   Rule: Access phase decision mapping
     Scenario: Returns 503 when no bundle exists
       Given the decision api dependencies are initialized
