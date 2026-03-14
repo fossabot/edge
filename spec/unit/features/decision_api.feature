@@ -235,3 +235,248 @@ Feature: Decision API unit behavior
       Then the access phase proceeds without exiting
       And shadow mode log entry is emitted
       And the test cleanup restores globals
+
+  Rule: Jitter hash fallbacks
+    Scenario: stable jitter uses rolling hash when ngx.crc32_short is unavailable
+      Given the decision api dependencies are initialized
+      And ngx crc32_short is unavailable
+      And the mode is "decision_service"
+      And the rule engine decision is reject with reason "rate_limit_exceeded" and retry_after 60
+      When I run the access handler
+      Then the request is rejected with status 429
+      And the test cleanup restores globals
+
+    Scenario: stable identity hash uses sha1_bin when hmac_sha256 is unavailable
+      Given the decision api dependencies are initialized
+      And ngx hmac_sha256 is unavailable for identity hash
+      And the mode is "decision_service"
+      And the rule engine decision is reject with reason "rate_limit_exceeded" and retry_after 60
+      When I run the access handler
+      Then the request is rejected with status 429
+      And the test cleanup restores globals
+
+    Scenario: stable identity hash uses pure rolling hash when hmac_sha256 and sha1_bin are unavailable
+      Given the decision api dependencies are initialized
+      And ngx hmac_sha256 and sha1_bin are unavailable
+      And the mode is "decision_service"
+      And the rule engine decision is reject with reason "rate_limit_exceeded" and retry_after 60
+      When I run the access handler
+      Then the request is rejected with status 429
+      And the test cleanup restores globals
+
+  Rule: Provider detection
+    Scenario: provider is anthropic when path contains anthropic segment
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And request method is "GET" and path is "/anthropic/v1/messages"
+      When I build request context
+      Then request context provider is "anthropic"
+      And the test cleanup restores globals
+
+    Scenario: provider is openai_compatible for /v1/chat/completions
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And request method is "GET" and path is "/v1/chat/completions"
+      When I build request context
+      Then request context provider is "openai_compatible"
+      And the test cleanup restores globals
+
+    Scenario: provider is gemini when path contains gemini segment
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And request method is "GET" and path is "/api/gemini/chat"
+      When I build request context
+      Then request context provider is "gemini"
+      And the test cleanup restores globals
+
+    Scenario: provider is nil for unknown path
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And request method is "GET" and path is "/api/v1/users"
+      When I build request context
+      Then request context provider is nil
+      And the test cleanup restores globals
+
+    Scenario: provider is mistral when path contains mistral segment
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And request method is "GET" and path is "/mistral/chat"
+      When I build request context
+      Then request context provider is "mistral"
+      And the test cleanup restores globals
+
+  Rule: ip tor normalization via normalize_boolish
+    Scenario: ip tor is true when X-Tor-Exit header is yes
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And headers include "X-Tor-Exit" as "yes"
+      When I build request context
+      Then request context ip tor is "true"
+      And the test cleanup restores globals
+
+    Scenario: ip tor is false when X-Tor-Exit header is no
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And headers include "X-Tor-Exit" as "no"
+      When I build request context
+      Then request context ip tor is "false"
+      And the test cleanup restores globals
+
+    Scenario: ip tor is true when X-Tor-Exit header is 1
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And headers include "X-Tor-Exit" as "1"
+      When I build request context
+      Then request context ip tor is "true"
+      And the test cleanup restores globals
+
+    Scenario: ip tor is false when X-Tor-Exit header is 0
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And headers include "X-Tor-Exit" as "0"
+      When I build request context
+      Then request context ip tor is "false"
+      And the test cleanup restores globals
+
+  Rule: Bundle descriptor hint suppresses user agent
+    Scenario: user_agent is nil when bundle descriptor hints needs_user_agent is false
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And the bundle has descriptor hints with needs_user_agent false
+      And headers include "User-Agent" as "TestBot/1.0"
+      When I build request context with the current bundle
+      Then request context user agent is nil
+      And the test cleanup restores globals
+
+  Rule: access_handler 503 paths
+    Scenario: access_handler returns 503 when rule engine evaluate is missing
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And the rule engine evaluate is removed
+      When I run the access handler
+      Then the request is rejected with status 503
+      And the test cleanup restores globals
+
+    Scenario: access_handler returns 503 when no bundle is loaded
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And no bundle is currently loaded
+      When I run the access handler
+      Then the request is rejected with status 503
+      And the test cleanup restores globals
+
+  Rule: LLM rejection produces JSON error body
+    Scenario: access_handler produces JSON error body for tpm_exceeded
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And ngx say is captured
+      And the rule engine decision is reject with reason "tpm_exceeded" and retry_after 60
+      When I run the access handler
+      Then the request is rejected with status 429
+      And response content type is "application/json"
+      And ngx say was called
+      And the test cleanup restores globals
+
+    Scenario: access_handler produces JSON error body for tpd_exceeded
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And ngx say is captured
+      And the rule engine decision is reject with reason "tpd_exceeded" and retry_after 3600
+      When I run the access handler
+      Then the request is rejected with status 429
+      And response content type is "application/json"
+      And ngx say was called
+      And the test cleanup restores globals
+
+  Rule: Retry-after bucket gt_3600
+    Scenario: retry_after 7200 seconds emits gt_3600 bucket metric
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And the rule engine decision is reject with reason "rate_limit_exceeded" and retry_after 7200
+      When I run the access handler
+      Then retry after bucket metric is emitted for bucket "gt_3600"
+      And the test cleanup restores globals
+
+  Rule: log_handler upstream error
+    Scenario: log_handler queues upstream_error_forwarded event for status 502
+      Given the decision api dependencies are initialized
+      And decision api is initialized with a mock saas client
+      And ngx status is 502
+      And upstream address is "backend:8080"
+      When I run the log handler
+      Then the saas client received an event of type "upstream_error_forwarded"
+      And the test cleanup restores globals
+
+    Scenario: log_handler does not queue event for status 429
+      Given the decision api dependencies are initialized
+      And decision api is initialized with a mock saas client
+      And ngx status is 429
+      When I run the log handler
+      Then no saas client event was queued
+      And the test cleanup restores globals
+
+    Scenario: log_handler does not queue event when no saas client
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And ngx status is 500
+      When I run the log handler
+      Then the access phase proceeds without exiting
+      And the test cleanup restores globals
+
+  Rule: debug_session_handler
+    Scenario: debug_session_handler returns 404 when no secret configured
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      When I run the debug session handler
+      Then the handler exits with status 404
+      And the test cleanup restores globals
+
+    Scenario: debug_session_handler returns 405 for GET request
+      Given the decision api dependencies are initialized
+      And the debug session secret is configured as "my-secret"
+      And the request method for handler is "GET"
+      When I run the debug session handler
+      Then the handler exits with status 405
+      And the test cleanup restores globals
+
+    Scenario: debug_session_handler returns 403 for wrong secret
+      Given the decision api dependencies are initialized
+      And the debug session secret is configured as "my-secret"
+      And the request method for handler is "POST"
+      And headers include "X-Fairvisor-Debug-Secret" as "wrong-secret"
+      When I run the debug session handler
+      Then the handler exits with status 403
+      And the test cleanup restores globals
+
+    Scenario: debug_session_handler returns 204 for valid secret
+      Given the decision api dependencies are initialized
+      And the debug session secret is configured as "my-secret"
+      And the request method for handler is "POST"
+      And headers include "X-Fairvisor-Debug-Secret" as "my-secret"
+      When I run the debug session handler
+      Then the handler exits with status 204
+      And the test cleanup restores globals
+
+  Rule: debug_logout_handler
+    Scenario: debug_logout_handler returns 404 when no secret configured
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      When I run the debug logout handler
+      Then the handler exits with status 404
+      And the test cleanup restores globals
+
+    Scenario: debug_logout_handler returns 405 for GET request
+      Given the decision api dependencies are initialized
+      And the debug session secret is configured as "my-secret"
+      And the request method for handler is "GET"
+      When I run the debug logout handler
+      Then the handler exits with status 405
+      And the test cleanup restores globals
+
+    Scenario: debug_logout_handler returns 204 and clears cookie on POST
+      Given the decision api dependencies are initialized
+      And the debug session secret is configured as "my-secret"
+      And the request method for handler is "POST"
+      When I run the debug logout handler
+      Then the handler exits with status 204
+      And the test cleanup restores globals

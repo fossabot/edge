@@ -424,6 +424,10 @@ runner:when("^I build request context$", function(ctx)
   ctx.request_context = decision_api.build_request_context()
 end)
 
+runner:when("^I build request context with the current bundle$", function(ctx)
+  ctx.request_context = decision_api.build_request_context(ctx.bundle)
+end)
+
 runner:when("^I run the access handler$", function(ctx)
   ctx.access_result = decision_api.access_handler()
 end)
@@ -673,6 +677,150 @@ runner:then_("^the test cleanup restores globals$", function(ctx)
   ctx.request_body_file = nil
 
   os.getenv = ctx.original_getenv
+end)
+
+-- ============================================================
+-- Issue #30: targeted coverage additions for decision_api.lua
+-- ============================================================
+
+runner:given("^ngx say is captured$", function(_)
+  ngx.say_calls = {}
+  ngx.say = function(msg)
+    ngx.say_calls[#ngx.say_calls + 1] = msg
+  end
+end)
+
+runner:given("^ngx crc32_short is unavailable$", function(_)
+  ngx.crc32_short = nil
+end)
+
+runner:given("^ngx hmac_sha256 is unavailable for identity hash$", function(_)
+  ngx.hmac_sha256 = nil
+end)
+
+runner:given("^ngx hmac_sha256 and sha1_bin are unavailable$", function(_)
+  ngx.hmac_sha256 = nil
+  ngx.sha1_bin = nil
+end)
+
+runner:given("^the rule engine evaluate is removed$", function(ctx)
+  ctx.rule_engine.evaluate = nil
+end)
+
+runner:given("^the bundle has descriptor hints with needs_user_agent false$", function(ctx)
+  ctx.bundle = {
+    id = "bundle-1",
+    descriptor_hints = { needs_user_agent = false },
+  }
+end)
+
+runner:given("^ngx status is (%d+)$", function(_, status)
+  ngx.status = tonumber(status)
+end)
+
+runner:given('^upstream address is "([^"]+)"$', function(_, addr)
+  ngx.var.upstream_addr = addr
+end)
+
+runner:given('^the debug session secret is configured as "([^"]+)"$', function(ctx, secret)
+  os.getenv = function(key)
+    if key == "FAIRVISOR_MODE" then return "decision_service" end
+    return ctx.env_overrides and ctx.env_overrides[key] or nil
+  end
+  local ok, err = decision_api.init({
+    bundle_loader = ctx.bundle_loader,
+    rule_engine = ctx.rule_engine,
+    health = ctx.health,
+    config = { debug_session_secret = secret },
+  })
+  assert.is_true(ok)
+  assert.is_nil(err)
+  ngx.req.get_method = function()
+    return ctx.request_method_override or "POST"
+  end
+  ngx.say_calls = {}
+  ngx.say = function(msg)
+    ngx.say_calls[#ngx.say_calls + 1] = msg
+  end
+end)
+
+runner:given('^the request method for handler is "([^"]+)"$', function(ctx, method)
+  ctx.request_method_override = method
+  ngx.req.get_method = function()
+    return method
+  end
+end)
+
+runner:given("^decision api is initialized with a mock saas client$", function(ctx)
+  ctx.saas_events = {}
+  ctx.saas_client = {
+    queue_event = function(event)
+      ctx.saas_events[#ctx.saas_events + 1] = event
+      return true
+    end,
+  }
+  os.getenv = function(key)
+    if key == "FAIRVISOR_MODE" then return "decision_service" end
+    return ctx.env_overrides and ctx.env_overrides[key] or nil
+  end
+  local ok, err = decision_api.init({
+    bundle_loader = ctx.bundle_loader,
+    rule_engine = ctx.rule_engine,
+    health = ctx.health,
+    saas_client = ctx.saas_client,
+  })
+  assert.is_true(ok)
+  assert.is_nil(err)
+end)
+
+runner:when("^I run the debug session handler$", function(ctx)
+  ctx.debug_session_result = decision_api.debug_session_handler()
+end)
+
+runner:when("^I run the debug logout handler$", function(ctx)
+  ctx.debug_logout_result = decision_api.debug_logout_handler()
+end)
+
+runner:when("^I run the log handler$", function(_)
+  decision_api.log_handler()
+end)
+
+runner:then_("^ngx say was called$", function(_)
+  assert.is_truthy(ngx.say_calls and #ngx.say_calls > 0)
+end)
+
+runner:then_('^response content type is "([^"]+)"$', function(_, ct)
+  assert.equals(ct, ngx.header["Content-Type"])
+end)
+
+runner:then_("^the handler exits with status (%d+)$", function(_, status)
+  assert.equals(tonumber(status), ngx.exit_calls[#ngx.exit_calls])
+end)
+
+runner:then_('^the saas client received an event of type "([^"]+)"$', function(ctx, event_type)
+  local found = false
+  for _, event in ipairs(ctx.saas_events or {}) do
+    if event.event_type == event_type then
+      found = true
+    end
+  end
+  assert.is_true(found, "expected saas event type '" .. event_type .. "'")
+end)
+
+runner:then_("^no saas client event was queued$", function(ctx)
+  assert.equals(0, #(ctx.saas_events or {}))
+end)
+
+runner:then_('^request context provider is "([^"]+)"$', function(ctx, provider)
+  assert.equals(provider, ctx.request_context.provider)
+end)
+
+runner:then_("^request context provider is nil$", function(ctx)
+  assert.is_nil(ctx.request_context.provider)
+end)
+
+runner:then_("^request context user agent is nil$", function(ctx)
+  assert.is_nil(ctx.request_context.user_agent)
 end)
 
 runner:feature_file_relative("features/decision_api.feature")

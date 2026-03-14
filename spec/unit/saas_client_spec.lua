@@ -402,4 +402,149 @@ runner:then_("^backoff suppresses immediate retry and allows retry after (.+) se
   assert.equals(2, heartbeat_calls_after_wait)
 end)
 
+-- ============================================================
+-- Issue #30: targeted coverage additions for saas_client.lua
+-- ============================================================
+
+runner:given("^a default SaaS client config with token containing newline$", function(ctx)
+  ctx.config = {
+    edge_id = "edge-test-1",
+    edge_token = "token\ninjected",
+    saas_url = "https://saas.example",
+    heartbeat_interval = 5,
+    event_flush_interval = 60,
+    config_poll_interval = 30,
+    max_batch_size = 2,
+    max_buffer_size = 3,
+  }
+end)
+
+runner:given("^config pull returns 200 with rejecting bundle$", function(ctx)
+  ctx.http.queue_response("GET", ctx.config.saas_url .. "/api/v1/edge/config", {
+    status = 200,
+    body = { reject = true, version = "v-reject" },
+  })
+end)
+
+runner:given("^the ack endpoint accepts the rejection$", function(ctx)
+  ctx.http.queue_response("POST", ctx.config.saas_url .. "/api/v1/edge/config/ack", { status = 200 })
+end)
+
+runner:given("^heartbeat succeeds with JSON string body$", function(ctx)
+  ctx.http.queue_response("POST", ctx.config.saas_url .. "/api/v1/edge/heartbeat", {
+    status = 200,
+    body = '{"config_update_available":false,"server_time":' .. tostring(ctx.time.now()) .. '}',
+  })
+end)
+
+runner:when("^I call flush_events on a fresh client$", function(ctx)
+  local saved = package.loaded["fairvisor.saas_client"]
+  package.loaded["fairvisor.saas_client"] = nil
+  local fresh = require("fairvisor.saas_client")
+  ctx.flush_result = fresh.flush_events()
+  package.loaded["fairvisor.saas_client"] = saved
+end)
+
+runner:when("^I call pull_config on a fresh client$", function(ctx)
+  local saved = package.loaded["fairvisor.saas_client"]
+  package.loaded["fairvisor.saas_client"] = nil
+  local fresh = require("fairvisor.saas_client")
+  ctx.pull_ok, ctx.pull_err = fresh.pull_config()
+  package.loaded["fairvisor.saas_client"] = saved
+end)
+
+runner:when('^I queue a coalesceable event with route "([^"]+)"$', function(_, route)
+  saas_client.queue_event({
+    event_type = "request_throttled",
+    route = route,
+    reason_code = "rate_limit",
+    status_code = 429,
+  })
+end)
+
+runner:when("^I queue the same coalesceable event again$", function(_)
+  saas_client.queue_event({
+    event_type = "request_throttled",
+    route = "/api/v1/test",
+    reason_code = "rate_limit",
+    status_code = 429,
+  })
+end)
+
+runner:when('^I queue an event with subject_id "([^"]+)"$', function(_, subject_id)
+  saas_client.queue_event({
+    event_type = "request_rejected",
+    route = "/api/test",
+    subject_id = subject_id,
+  })
+end)
+
+runner:when("^the heartbeat timer callback runs with premature true$", function(ctx)
+  ctx.timers[1].fn(true)
+end)
+
+runner:then_("^flush events returns 0$", function(ctx)
+  assert.equals(0, ctx.flush_result)
+end)
+
+runner:then_("^pull_config returns not initialized error$", function(ctx)
+  assert.is_nil(ctx.pull_ok)
+  assert.is_truthy(ctx.pull_err)
+  assert.is_truthy(ctx.pull_err:find("not initialized"))
+end)
+
+runner:then_("^the register endpoint used empty bearer auth$", function(ctx)
+  for _, request in ipairs(ctx.http.requests) do
+    if request.method == "POST" and request.url == ctx.config.saas_url .. "/api/v1/edge/register" then
+      assert.equals("Bearer ", request.headers.Authorization)
+      return
+    end
+  end
+  assert.is_true(false, "register request not found")
+end)
+
+runner:then_("^the flushed batch includes the original and coalesced summary event$", function(ctx)
+  assert.equals(2, ctx.flushed)
+end)
+
+runner:then_("^the flushed event has subject_id_hash and no raw subject_id$", function(ctx)
+  for _, request in ipairs(ctx.http.requests) do
+    if request.url == ctx.config.saas_url .. "/api/v1/edge/events" then
+      local events = request.body and request.body.events or {}
+      -- Find the request_rejected event (init also queues an edge_started event)
+      local target_ev = nil
+      for _, ev in ipairs(events) do
+        if ev.event_type == "request_rejected" then
+          target_ev = ev
+          break
+        end
+      end
+      assert.is_not_nil(target_ev, "expected request_rejected event in batch")
+      assert.is_not_nil(target_ev.subject_id_hash, "subject_id_hash should be set")
+      assert.is_nil(target_ev.subject_id, "raw subject_id should be removed")
+      return
+    end
+  end
+  assert.is_true(false, "no events POST request found")
+end)
+
+runner:then_("^the bundle is acked as rejected$", function(ctx)
+  for _, request in ipairs(ctx.http.requests) do
+    if request.method == "POST" and request.url == ctx.config.saas_url .. "/api/v1/edge/config/ack" then
+      assert.equals("rejected", request.body.status)
+      return
+    end
+  end
+  assert.is_true(false, "config/ack POST request not found")
+end)
+
+runner:then_("^no heartbeat request was made$", function(ctx)
+  for _, request in ipairs(ctx.http.requests) do
+    if request.url == ctx.config.saas_url .. "/api/v1/edge/heartbeat" then
+      assert.is_true(false, "unexpected heartbeat request was made")
+    end
+  end
+  assert.is_true(true)
+end)
+
 runner:feature_file_relative("features/saas_client.feature")

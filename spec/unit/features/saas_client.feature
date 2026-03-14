@@ -131,3 +131,117 @@ Feature: SaaS protocol client unit behavior
       When the heartbeat timer callback runs
       And the event flush timer callback runs
       Then the events payload flags clock skew
+
+  Rule: Uninitialized client guards
+    Scenario: flush_events returns 0 when client is not initialized
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      When I call flush_events on a fresh client
+      Then flush events returns 0
+
+    Scenario: pull_config returns error when client is not initialized
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      When I call pull_config on a fresh client
+      Then pull_config returns not initialized error
+
+  Rule: Auth token security
+    Scenario: edge token with newline character uses empty bearer in requests
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config with token containing newline
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      When the client is initialized
+      Then initialization succeeds
+      And the register endpoint used empty bearer auth
+
+  Rule: Event coalescing
+    Scenario: two coalesceable events with same signature produce one buffered then one summary on flush
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And events endpoint accepts one batch
+      And the client is initialized
+      When I queue a coalesceable event with route "/api/v1/test"
+      And I queue the same coalesceable event again
+      And I force flush events
+      Then the flushed batch includes the original and coalesced summary event
+
+  Rule: Subject ID hashing
+    Scenario: queue_event with subject_id hashes the ID and removes raw field
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And events endpoint accepts one batch
+      And the client is initialized
+      When I queue an event with subject_id "user-secret-123"
+      And I force flush events
+      Then the flushed event has subject_id_hash and no raw subject_id
+
+  Rule: Non-retriable event flush status
+    Scenario: non-retriable status 401 on event flush counts as error
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And events endpoint fails with status 401
+      And the client is initialized
+      And I queue events with ids: 1
+      When I force flush events
+      Then events_sent_total has one error increment
+
+  Rule: Bundle load rejection ack
+    Scenario: config pull with bundle load rejection acks as rejected
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And config poll interval is 999999 seconds
+      And heartbeat succeeds with config update available
+      And config pull returns 200 with rejecting bundle
+      And the ack endpoint accepts the rejection
+      And the client is initialized
+      When the heartbeat timer callback runs
+      Then the bundle is acked as rejected
+
+  Rule: Half-open circuit failure reopens circuit
+    Scenario: failure during half_open state transitions circuit back to disconnected
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And config poll interval is 999999 seconds
+      And heartbeat returns retriable failure 5 times
+      And heartbeat returns retriable failure 1 times
+      And the client is initialized
+      When the heartbeat timer callback runs 5 times
+      Then the circuit state becomes disconnected
+      Given time advances by 30 seconds
+      When the heartbeat timer callback runs
+      Then the circuit state becomes disconnected
+
+  Rule: Heartbeat string body extract_payload
+    Scenario: heartbeat response with JSON string body is correctly parsed
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And config poll interval is 999999 seconds
+      And heartbeat succeeds with JSON string body
+      And the client is initialized
+      When the heartbeat timer callback runs
+      Then the circuit state becomes connected
+
+  Rule: Timer premature callback
+    Scenario: heartbeat timer with premature true returns without making HTTP request
+      Given the nginx mock environment with timer capture is reset
+      And a default SaaS client config
+      And default bundle_loader and health dependencies
+      And registration succeeds
+      And the client is initialized
+      When the heartbeat timer callback runs with premature true
+      Then no heartbeat request was made
