@@ -480,3 +480,116 @@ Feature: Decision API unit behavior
       When I run the debug logout handler
       Then the handler exits with status 204
       And the test cleanup restores globals
+
+  Rule: access_handler handles invalid rule engine decision
+    Scenario: access_handler returns 503 when rule engine returns nil
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And the rule engine returns nil for decision
+      When I run the access handler
+      Then the request is rejected with status 503
+      And the test cleanup restores globals
+
+  Rule: Throttle delay clamping and zero delay
+    Scenario: throttle delay exceeding maximum is clamped to 30 seconds
+      Given the decision api dependencies are initialized
+      And the mode is "reverse_proxy"
+      And the rule engine decision is throttle with delay_ms exceeding maximum
+      When I run the access handler
+      Then throttle delay sleep is 30.0 seconds
+      And the test cleanup restores globals
+
+    Scenario: throttle with zero delay_ms does not sleep
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And the rule engine decision is throttle with zero delay
+      When I run the access handler
+      Then no throttle sleep occurred
+      And the access phase proceeds without exiting
+      And the test cleanup restores globals
+
+  Rule: Reject Retry-After default when not configured
+    Scenario: reject with no retry_after in decision defaults Retry-After to 1
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And the rule engine decision is reject with no retry_after configured
+      When I run the access handler
+      Then the request is rejected with status 429
+      And response header "Retry-After" is "1"
+      And the test cleanup restores globals
+
+  Rule: LLM rejection for additional token reasons
+    Scenario: access_handler produces JSON error body for prompt_tokens_exceeded
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And ngx say is captured
+      And the rule engine decision is reject with reason "prompt_tokens_exceeded" and no retry_after
+      When I run the access handler
+      Then the request is rejected with status 429
+      And response content type is "application/json"
+      And ngx say was called
+      And the test cleanup restores globals
+
+    Scenario: access_handler produces JSON error body for max_tokens_per_request_exceeded
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And ngx say is captured
+      And the rule engine decision is reject with reason "max_tokens_per_request_exceeded" and no retry_after
+      When I run the access handler
+      Then the request is rejected with status 429
+      And response content type is "application/json"
+      And ngx say was called
+      And the test cleanup restores globals
+
+  Rule: JWT payload parsing edge cases
+    Scenario: JWT with too many segments returns nil
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service" and retry jitter is "true"
+      And headers include "Authorization" as "Bearer a.b.c.d"
+      When I decode the jwt payload from authorization header
+      Then jwt claims are nil
+      And the test cleanup restores globals
+
+    Scenario: JWT with only one dot segment returns nil
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service" and retry jitter is "true"
+      And headers include "Authorization" as "Bearer a.b"
+      When I decode the jwt payload from authorization header
+      Then jwt claims are nil
+      And the test cleanup restores globals
+
+  Rule: Request context IP country fallback header
+    Scenario: ip_country falls back to X-Country-Code header when geoip var is absent
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And headers include "X-Country-Code" as "DE"
+      When I build request context
+      Then request context ip country is "DE"
+      And the test cleanup restores globals
+
+  Rule: Request context host normalization edge cases
+    Scenario: empty host variable produces nil host in request context
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And the host variable is empty
+      When I build request context
+      Then request context host is nil
+      And the test cleanup restores globals
+
+  Rule: allow decision with no headers
+    Scenario: allow decision without headers proceeds without exiting
+      Given the decision api dependencies are initialized
+      And the mode is "decision_service"
+      And the rule engine decision is allow with no headers
+      When I run the access handler
+      Then the access phase proceeds without exiting
+      And the test cleanup restores globals
+
+  Rule: log_handler ignores non-error statuses
+    Scenario: log_handler does not queue event for status 200
+      Given the decision api dependencies are initialized
+      And decision api is initialized with a mock saas client
+      And ngx status is 200
+      When I run the log handler
+      Then no saas client event was queued
+      And the test cleanup restores globals

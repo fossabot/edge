@@ -823,4 +823,74 @@ runner:then_("^request context user agent is nil$", function(ctx)
   assert.is_nil(ctx.request_context.user_agent)
 end)
 
+-- ============================================================
+-- Issue #33: targeted coverage additions for decision_api.lua
+-- ============================================================
+
+runner:given("^the rule engine returns nil for decision$", function(ctx)
+  ctx.decision = nil
+end)
+
+runner:given("^the rule engine decision is throttle with delay_ms exceeding maximum$", function(ctx)
+  ctx.decision = {
+    action = "throttle",
+    policy_id = "policy-t",
+    delay_ms = 40000,
+    headers = {
+      ["RateLimit-Limit"] = "25",
+      ["RateLimit-Remaining"] = "24",
+      ["RateLimit-Reset"] = "1",
+    },
+  }
+end)
+
+runner:given("^the rule engine decision is throttle with zero delay$", function(ctx)
+  ctx.decision = {
+    action = "throttle",
+    policy_id = "policy-t",
+    delay_ms = 0,
+    headers = {},
+  }
+end)
+
+runner:given("^the rule engine decision is reject with no retry_after configured$", function(ctx)
+  ctx.decision = {
+    action = "reject",
+    policy_id = "policy-r",
+    headers = {},
+  }
+end)
+
+runner:given('^the rule engine decision is reject with reason "([^"]+)" and no retry_after$', function(ctx, reason)
+  ctx.decision = {
+    action = "reject",
+    policy_id = "policy-r",
+    reason = reason,
+    headers = {},
+  }
+end)
+
+runner:given("^the rule engine decision is allow with no headers$", function(ctx)
+  ctx.decision = {
+    action = "allow",
+    policy_id = "policy-a",
+  }
+end)
+
+runner:given("^the host variable is empty$", function(_)
+  ngx.var.host = ""
+end)
+
+runner:then_("^no throttle sleep occurred$", function(_)
+  assert.equals(0, #ngx.sleep_calls)
+end)
+
+runner:then_("^request context host is nil$", function(ctx)
+  assert.is_nil(ctx.request_context.host)
+end)
+
+runner:then_('^request context ip country is "([^"]+)"$', function(ctx, expected)
+  assert.equals(expected, ctx.request_context.ip_country)
+end)
+
 runner:feature_file_relative("features/decision_api.feature")
