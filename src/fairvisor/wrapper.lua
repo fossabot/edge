@@ -406,6 +406,19 @@ function _M.strip_policy_headers(header_set)
   end
 end
 
+-- strip_response_auth_headers()
+-- Removes upstream auth-related response headers before they reach the client.
+function _M.strip_response_auth_headers()
+  if not ngx or not ngx.header then return end
+
+  ngx.header["Authorization"] = nil
+  ngx.header["authorization"] = nil
+  ngx.header["x-api-key"] = nil
+  ngx.header["X-Api-Key"] = nil
+  ngx.header["x-goog-api-key"] = nil
+  ngx.header["X-Goog-Api-Key"] = nil
+end
+
 -- replace_openai_cutoff(output, cutoff_format)
 -- Post-processes streaming.body_filter() output to replace the OpenAI-style
 -- cutoff sequence with the provider-native format.

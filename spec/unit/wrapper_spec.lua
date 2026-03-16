@@ -286,6 +286,34 @@ runner:then_("^header descriptors is empty$", function(ctx)
 end)
 
 -- ---------------------------------------------------------------------------
+-- Response auth header sanitization
+-- ---------------------------------------------------------------------------
+
+runner:given("^wrapper response headers contain auth%-related headers$", function(_ctx)
+  ngx.header = {
+    ["Authorization"] = "Bearer should-not-leak",
+    ["x-api-key"] = "anthropic-secret",
+    ["x-goog-api-key"] = "gemini-secret",
+    ["Content-Type"] = "application/json",
+  }
+end)
+
+runner:when("^I call strip_response_auth_headers$", function(ctx)
+  wrapper.strip_response_auth_headers()
+  ctx.response_headers = ngx.header
+end)
+
+runner:then_("^response header \"(.-)\" is nil$", function(ctx, name)
+  assert.is_not_nil(ctx.response_headers)
+  assert.is_nil(ctx.response_headers[name])
+end)
+
+runner:then_("^response header \"(.-)\" is \"(.-)\"$", function(ctx, name, value)
+  assert.is_not_nil(ctx.response_headers)
+  assert.equals(value, ctx.response_headers[name])
+end)
+
+-- ---------------------------------------------------------------------------
 -- access_handler setup helpers
 -- ---------------------------------------------------------------------------
 

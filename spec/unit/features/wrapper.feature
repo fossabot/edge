@@ -206,6 +206,16 @@ Feature: LLM Proxy Wrapper Mode unit behavior
       When I call get_provider for path "/api/v1/some-internal-endpoint"
       Then provider is nil
 
+  Rule: Response auth header sanitization
+    Scenario: auth-related upstream response headers are stripped
+      Given the nginx mock is set up
+      And wrapper response headers contain auth-related headers
+      When I call strip_response_auth_headers
+      Then response header "Authorization" is nil
+      And response header "x-api-key" is nil
+      And response header "x-goog-api-key" is nil
+      And response header "Content-Type" is "application/json"
+
   Rule: wrapper init
     Scenario: init with valid deps table returns true
       When I call wrapper init with valid deps
