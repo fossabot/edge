@@ -621,3 +621,116 @@ runner:then_("^queue_event with non%-table argument returns error$", function(_)
 end)
 
 runner:feature_file_relative("features/saas_client.feature")
+
+local function _reload_saas_client()
+  package.loaded["fairvisor.saas_client"] = nil
+  return require("fairvisor.saas_client")
+end
+
+describe("saas_client targeted direct coverage", function()
+  before_each(function()
+    mock_ngx.setup_ngx()
+  end)
+
+  it("validates required config fields", function()
+    local reloaded = _reload_saas_client()
+
+    local ok, err = reloaded.init(nil, {})
+    assert.is_nil(ok)
+    assert.equals("config must be a table", err)
+
+    ok, err = reloaded.init({ edge_token = "t", saas_url = "https://s" }, {})
+    assert.is_nil(ok)
+    assert.equals("edge_id is required", err)
+
+    ok, err = reloaded.init({ edge_id = "e", saas_url = "https://s" }, {})
+    assert.is_nil(ok)
+    assert.equals("edge_token is required", err)
+
+    ok, err = reloaded.init({ edge_id = "e", edge_token = "t" }, {})
+    assert.is_nil(ok)
+    assert.equals("saas_url is required", err)
+  end)
+
+  it("validates required deps shape", function()
+    local reloaded = _reload_saas_client()
+    local config = { edge_id = "e", edge_token = "t", saas_url = "https://s" }
+
+    local ok, err = reloaded.init(config, nil)
+    assert.is_nil(ok)
+    assert.equals("deps must be a table", err)
+
+    ok, err = reloaded.init(config, {})
+    assert.is_nil(ok)
+    assert.equals("deps.bundle_loader is required", err)
+
+    ok, err = reloaded.init(config, { bundle_loader = {} })
+    assert.is_nil(ok)
+    assert.equals("deps.bundle_loader must implement get_current, load_from_string, and apply", err)
+
+    ok, err = reloaded.init(config, {
+      bundle_loader = { get_current = function() end, load_from_string = function() end, apply = function() end },
+    })
+    assert.is_nil(ok)
+    assert.equals("deps.health is required", err)
+  end)
+
+  it("applies default intervals and buffer sizes on init", function()
+    local reloaded = _reload_saas_client()
+    local http = mock_http.new()
+    http.queue_response("POST", "https://s/api/v1/edge/register", { status = 200 })
+    local config = {
+      edge_id = "e",
+      edge_token = "t",
+      saas_url = "https://s",
+    }
+    local ok, err = reloaded.init(config, {
+      bundle_loader = { get_current = function() end, load_from_string = function() end, apply = function() end },
+      health = { set = function() end, inc = function() end },
+      http_client = http.client,
+    })
+
+    assert.is_true(ok)
+    assert.is_nil(err)
+
+    assert.equals(5, config.heartbeat_interval)
+    assert.equals(60, config.event_flush_interval)
+    assert.equals(100, config.max_batch_size)
+    assert.equals(1000, config.max_buffer_size)
+  end)
+
+  it("flushes coalesced upstream_error_forwarded events successfully", function()
+    local reloaded = _reload_saas_client()
+    local http = mock_http.new()
+    http.queue_response("POST", "https://s/api/v1/edge/register", { status = 200 })
+    http.queue_response("POST", "https://s/api/v1/edge/events", { status = 200 })
+    local ok = reloaded.init({
+      edge_id = "e",
+      edge_token = "t",
+      saas_url = "https://s",
+      max_batch_size = 10,
+      max_buffer_size = 10,
+    }, {
+      bundle_loader = { get_current = function() end, load_from_string = function() end, apply = function() end },
+      health = { set = function() end, inc = function() end },
+      http_client = http.client,
+    })
+
+    assert.is_true(ok)
+    reloaded.queue_event({
+      event_type = "upstream_error_forwarded",
+      route = "/v1/chat",
+      upstream_status = 502,
+      upstream_host = "backend-a",
+    })
+    reloaded.queue_event({
+      event_type = "upstream_error_forwarded",
+      route = "/v1/chat",
+      upstream_status = 502,
+      upstream_host = "backend-a",
+    })
+
+    local flushed = reloaded.flush_events()
+    assert.equals(3, flushed)
+  end)
+end)

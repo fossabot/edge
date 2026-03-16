@@ -143,3 +143,32 @@ describe("env_config cleanup", function()
     assert.is_function(os.getenv)
   end)
 end)
+
+describe("env_config targeted direct coverage", function()
+  it("rejects non-table config", function()
+    local env_config = _reload_module()
+    local ok, err = env_config.validate(nil)
+    assert.is_nil(ok)
+    assert.equals("config must be a table", err)
+  end)
+
+  it("rejects invalid mode and invalid positive intervals", function()
+    local env_config = _reload_module()
+    local ok, err = env_config.validate({
+      edge_id = "edge-1",
+      config_file = "/tmp/policy.json",
+      mode = "wrapper",
+    })
+    assert.is_nil(ok)
+    assert.equals("FAIRVISOR_MODE must be decision_service or reverse_proxy", err)
+
+    ok, err = env_config.validate({
+      edge_id = "edge-1",
+      config_file = "/tmp/policy.json",
+      mode = "decision_service",
+      config_poll_interval = 0,
+    })
+    assert.is_nil(ok)
+    assert.equals("FAIRVISOR_CONFIG_POLL_INTERVAL must be a positive number", err)
+  end)
+end)

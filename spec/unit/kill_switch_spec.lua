@@ -178,3 +178,29 @@ runner:then_("^parsed epoch is nil$", function(ctx)
 end)
 
 runner:feature_file_relative("features/kill_switch.feature")
+
+describe("kill_switch targeted direct coverage", function()
+  it("rejects invalid top-level and entry shapes", function()
+    local ok, err = kill_switch.validate(nil)
+    assert.is_true(ok)
+    assert.is_nil(err)
+
+    ok, err = kill_switch.validate({ "bad" })
+    assert.is_nil(ok)
+    assert.equals("kill_switches[1] must be a table", err)
+  end)
+
+  it("rejects invalid reason type and invalid expires_at format", function()
+    local ok, err = kill_switch.validate({
+      { scope_key = "jwt:sub", scope_value = "u1", reason = 123 },
+    })
+    assert.is_nil(ok)
+    assert.equals("kill_switches[1].reason must be a string when set", err)
+
+    ok, err = kill_switch.validate({
+      { scope_key = "jwt:sub", scope_value = "u1", expires_at = "bad" },
+    })
+    assert.is_nil(ok)
+    assert.equals("kill_switches[1].expires_at must be valid ISO 8601 UTC (YYYY-MM-DDTHH:MM:SSZ)", err)
+  end)
+end)

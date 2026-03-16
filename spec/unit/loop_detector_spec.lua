@@ -197,3 +197,33 @@ runner:then_('^fingerprint "([^"]+)" stored count is (%d+)$', function(ctx, fing
 end)
 
 runner:feature_file_relative("features/loop_detector.feature")
+
+describe("loop_detector targeted direct coverage", function()
+  it("rejects non-table configs and invalid nested loop_detection block", function()
+    local ok, err = loop_detector.validate_config(nil)
+    assert.is_true(ok)
+    assert.is_nil(err)
+
+    ok, err = loop_detector.validate_config({ loop_detection = "bad" })
+    assert.is_nil(ok)
+    assert.equals("loop_detection must be a table", err)
+  end)
+
+  it("fills defaults and rejects unsupported similarity", function()
+    local config = { enabled = true, window_seconds = 10, threshold_identical_requests = 3 }
+    local ok = loop_detector.validate_config(config)
+    assert.is_true(ok)
+    assert.equals("reject", config.action)
+    assert.equals("exact", config.similarity)
+
+    local err
+    ok, err = loop_detector.validate_config({
+      enabled = true,
+      window_seconds = 10,
+      threshold_identical_requests = 3,
+      similarity = "fuzzy",
+    })
+    assert.is_nil(ok)
+    assert.equals("similarity must be exact", err)
+  end)
+end)

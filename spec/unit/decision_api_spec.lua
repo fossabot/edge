@@ -894,3 +894,275 @@ runner:then_('^request context ip country is "([^"]+)"$', function(ctx, expected
 end)
 
 runner:feature_file_relative("features/decision_api.feature")
+
+local function _named_upvalue(fn, target_name)
+  local index = 1
+  while true do
+    local name, value = debug.getupvalue(fn, index)
+    if not name then
+      return nil, nil
+    end
+    if name == target_name then
+      return value, index
+    end
+    index = index + 1
+  end
+end
+
+local function _set_named_upvalue(fn, target_name, new_value)
+  local _, index = _named_upvalue(fn, target_name)
+  assert.is_not_nil(index, "missing upvalue " .. target_name)
+  debug.setupvalue(fn, index, new_value)
+end
+
+describe("decision_api targeted direct helper coverage", function()
+  before_each(function()
+    mock_ngx.setup_package_mock()
+    mock_ngx.setup_ngx()
+    ngx.req = {
+      get_headers = function() return {} end,
+      get_uri_args = function() return {} end,
+      read_body = function() end,
+      get_body_data = function() return nil end,
+      get_body_file = function() return nil end,
+      get_method = function() return "POST" end,
+    }
+    ngx.var = {
+      request_method = "GET",
+      uri = "/v1/chat/completions",
+      host = "Example.COM:443",
+      remote_addr = "127.0.0.1",
+      http_cookie = "",
+    }
+    ngx.header = {}
+    ngx.ctx = {}
+    ngx.say = function(body) ngx._last_say = body end
+    ngx.exit = function(code) return code end
+  end)
+
+  it("covers JWT fallback decoder branches directly", function()
+    local fallback = _named_upvalue(decision_api.decode_jwt_payload, "_decode_json_fallback")
+    assert.is_nil(fallback(123))
+    assert.same({}, fallback("{}"))
+    assert.same({ a = 1, b = true, c = false }, fallback('{"a":1,"b":true,"c":false}'))
+    assert.is_nil(fallback('{"nested":{"x":1}}'))
+    assert.is_nil(fallback('{"oops":wat}'))
+  end)
+
+  it("covers request-context helper normalization functions", function()
+    local normalize_host = _named_upvalue(decision_api.build_request_context, "_normalize_request_host")
+    local normalize_boolish = _named_upvalue(decision_api.build_request_context, "_normalize_boolish")
+    local detect_provider = _named_upvalue(decision_api.build_request_context, "_detect_provider")
+    local safe_var = _named_upvalue(decision_api.build_request_context, "_safe_var")
+
+    assert.is_nil(normalize_host(nil))
+    assert.equals("example.com", normalize_host(" Example.COM:443 "))
+    assert.equals("https://bad.example", normalize_host("https://bad.example"))
+    assert.equals("true", normalize_boolish(true))
+    assert.equals("false", normalize_boolish("no"))
+    assert.is_nil(normalize_boolish("maybe"))
+    assert.equals("anthropic", detect_provider("/proxy/anthropic/v1/messages"))
+    assert.equals("openai_compatible", detect_provider("/foo/v1/chat/completions"))
+
+    local saved_var = ngx.var
+    ngx.var = setmetatable({}, {
+      __index = function()
+        error("boom")
+      end,
+    })
+    assert.is_nil(safe_var("http_cookie"))
+    ngx.var = saved_var
+  end)
+
+  it("covers reject header preparation defaults", function()
+    local prepare_reject_headers = _named_upvalue(decision_api.access_handler, "_prepare_reject_headers")
+
+    local headers = prepare_reject_headers({}, { policy_id = "policy-a" }, {})
+    assert.equals("1", headers["Retry-After"])
+    assert.equals("1", headers["RateLimit-Reset"])
+    assert.equals('"policy-a";r=0;t=1', headers["RateLimit"])
+
+    headers = prepare_reject_headers({}, {
+      policy_id = "policy-b",
+      reason = "budget_exceeded",
+      retry_after = 10,
+    }, { jwt_claims = { sub = "user-1" }, ip_address = "127.0.0.1", path = "/x" })
+    assert.is_true(tonumber(headers["Retry-After"]) <= 10)
+  end)
+
+  it("covers debug header injection with descriptor details", function()
+    local inject_debug_headers = _named_upvalue(decision_api.access_handler, "_inject_debug_headers")
+    local original_enabled = _named_upvalue(inject_debug_headers, "_debug_headers_enabled_for_request")
+    local original_cookie_valid = _named_upvalue(inject_debug_headers, "_is_debug_cookie_valid")
+
+    _set_named_upvalue(inject_debug_headers, "_debug_headers_enabled_for_request", function() return true end)
+    _set_named_upvalue(inject_debug_headers, "_is_debug_cookie_valid", function() return true end)
+
+    local headers = inject_debug_headers({}, {
+      action = "reject",
+      mode = "shadow",
+      reason = "rate_limit_exceeded",
+      policy_id = "policy-1",
+      rule_name = "rule-1",
+      latency_us = 123,
+      matched_policy_count = 2,
+      debug_descriptors = {
+        ["jwt:sub"] = "user-1",
+        ["header:x-e2e-key"] = string.rep("x", 300),
+      },
+    })
+
+    assert.equals("reject", headers["X-Fairvisor-Decision"])
+    assert.equals("shadow", headers["X-Fairvisor-Mode"])
+    assert.equals("policy-1", headers["X-Fairvisor-Debug-Policy"])
+    assert.equals("rule-1", headers["X-Fairvisor-Debug-Rule"])
+    assert.equals("123", headers["X-Fairvisor-Latency-Us"])
+    assert.equals("2", headers["X-Fairvisor-Debug-Matched-Policies"])
+    assert.is_truthy(headers["X-Fairvisor-Debug-Descriptor-1-Key"])
+    assert.is_true(#headers["X-Fairvisor-Debug-Descriptor-1-Value"] <= 256)
+
+    _set_named_upvalue(inject_debug_headers, "_debug_headers_enabled_for_request", original_enabled)
+    _set_named_upvalue(inject_debug_headers, "_is_debug_cookie_valid", original_cookie_valid)
+  end)
+
+  it("covers build_request_context body-file and geoip paths", function()
+    local body_file = "/tmp/decision-api-body.txt"
+    local file = assert(io.open(body_file, "wb"))
+    file:write("hello body")
+    file:close()
+
+    ngx.req = {
+      get_headers = function()
+        return {
+          ["Authorization"] = "Bearer a.eyJzdWIiOiJ1c2VyLTEifQ.c",
+          ["User-Agent"] = "agent/1.0",
+        }
+      end,
+      get_uri_args = function() return { q = "1" } end,
+      read_body = function() end,
+      get_body_data = function() return nil end,
+      get_body_file = function() return body_file end,
+    }
+    ngx.decode_base64 = function()
+      return '{"sub":"user-1"}'
+    end
+    ngx.var.request_method = "POST"
+    ngx.var.uri = "/anthropic/v1/messages"
+    ngx.var.host = "Example.COM:443"
+
+    local is_decision_service_mode = _named_upvalue(decision_api.build_request_context, "_is_decision_service_mode")
+    local config = _named_upvalue(is_decision_service_mode, "_config")
+    config.mode = "reverse_proxy"
+
+    local deps = _named_upvalue(decision_api.build_request_context, "_deps")
+    deps.geoip = {
+      initted = function() return true end,
+      lookup = function(_, _, kind)
+        if kind == "country" then
+          return { country = { iso_code = "DE" } }
+        end
+        return { autonomous_system_number = 64512 }
+      end,
+    }
+
+    local ctx = decision_api.build_request_context({ descriptor_hints = { needs_user_agent = true } })
+    os.remove(body_file)
+
+    assert.equals("example.com", ctx.host)
+    assert.equals("anthropic", ctx.provider)
+    assert.equals("DE", ctx.ip_country)
+    assert.equals(64512, ctx.ip_asn)
+    assert.equals("hello body", ctx.body)
+    assert.is_string(ctx.body_hash)
+  end)
+
+  it("returns 503 when debug cookie cannot be created", function()
+    local config = _named_upvalue(decision_api.debug_session_handler, "_config")
+    config.debug_session_secret = "secret"
+    ngx.req = {
+      get_method = function() return "POST" end,
+      get_headers = function()
+        return { ["X-Fairvisor-Debug-Secret"] = "secret" }
+      end,
+    }
+    ngx.hmac_sha256 = nil
+    ngx.sha1_bin = nil
+
+    local result = decision_api.debug_session_handler()
+    assert.equals(503, result)
+    assert.equals(503, ngx.status)
+    assert.equals('{"error":"debug_cookie_unavailable"}', ngx._last_say)
+  end)
+
+  it("covers metric emission error paths", function()
+    local maybe_emit_metric = _named_upvalue(decision_api.access_handler, "_maybe_emit_metric")
+    local maybe_emit_remaining = _named_upvalue(decision_api.access_handler, "_maybe_emit_ratelimit_remaining_metric")
+    local maybe_emit_retry_after = _named_upvalue(decision_api.access_handler, "_maybe_emit_retry_after_metric")
+    local deps = _named_upvalue(decision_api.access_handler, "_deps")
+
+    deps.health = {
+      inc = function()
+        error("metric boom")
+      end,
+      set = function()
+        error("set boom")
+      end,
+    }
+
+    maybe_emit_metric({ action = "allow", policy_id = "p1" })
+    maybe_emit_remaining({ headers = { ["RateLimit-Remaining"] = "7" }, policy_id = "p1" }, { path = "/x" })
+    maybe_emit_retry_after(10)
+    maybe_emit_remaining({ headers = {} }, {})
+    maybe_emit_retry_after(nil)
+  end)
+
+  it("covers debug cookie parsing and sha1 signing fallback", function()
+    local debug_enabled = _named_upvalue(decision_api.access_handler, "_debug_headers_enabled_for_request")
+    local is_cookie_valid = _named_upvalue(debug_enabled, "_is_debug_cookie_valid")
+    local sign_payload = _named_upvalue(is_cookie_valid, "_sign_debug_payload")
+    local config = _named_upvalue(sign_payload, "_config")
+
+    config.debug_session_secret = "secret"
+    ngx.hmac_sha256 = nil
+    ngx.sha1_bin = function(input)
+      return string.rep("a", 8) .. input
+    end
+
+    local signature = sign_payload("9999999999")
+    ngx.var.http_cookie = "foo=bar; fv_dbg=9999999999." .. signature
+    assert.is_true(is_cookie_valid())
+
+    ngx.var.http_cookie = "fv_dbg=bad-token"
+    assert.is_false(is_cookie_valid())
+
+    ngx.var.http_cookie = "fv_dbg=1." .. signature
+    assert.is_false(is_cookie_valid())
+  end)
+
+  it("returns init guard errors for missing dependencies", function()
+    local ok, err = decision_api.init(nil)
+    assert.is_nil(ok)
+    assert.equals("deps must be a table", err)
+
+    ok, err = decision_api.init({})
+    assert.is_nil(ok)
+    assert.equals("bundle_loader dependency is required", err)
+
+    ok, err = decision_api.init({ bundle_loader = {} })
+    assert.is_nil(ok)
+    assert.equals("rule_engine dependency is required", err)
+  end)
+
+  it("returns 503 for missing runtime dependencies in access_handler", function()
+    local original_deps = _named_upvalue(decision_api.access_handler, "_deps")
+    original_deps.bundle_loader = {}
+    original_deps.rule_engine = {}
+
+    local result = decision_api.access_handler()
+    assert.equals(503, result)
+
+    original_deps.bundle_loader = { get_current = function() return nil end }
+    result = decision_api.access_handler()
+    assert.equals(503, result)
+  end)
+end)

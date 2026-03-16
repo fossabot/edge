@@ -255,3 +255,43 @@ runner:then_('^reconcile fails with error "([^"]+)"$', function(ctx, expected)
 end)
 
 runner:feature_file_relative("features/cost_extractor.feature")
+
+describe("cost_extractor targeted direct coverage", function()
+  it("rejects invalid config bounds and fallback", function()
+    local ok, err = cost_extractor.validate_config({ max_parseable_body_bytes = 0 })
+    assert.is_nil(ok)
+    assert.equals("max_parseable_body_bytes must be > 0", err)
+
+    ok, err = cost_extractor.validate_config({ fallback = "" })
+    assert.is_nil(ok)
+    assert.equals("fallback must be a non-empty string", err)
+  end)
+
+  it("returns fallback errors for malformed JSON body", function()
+    local result, err, meta = cost_extractor.extract_from_response("{bad json", {
+      fallback = "default_cost",
+      max_parseable_body_bytes = 1024,
+      max_parse_time_ms = 100,
+    })
+    assert.is_nil(result)
+    assert.equals("json_parse_error", err)
+    assert.is_true(meta.fallback)
+  end)
+
+  it("rejects invalid stream buffer and parse time limits", function()
+    local ok, err = cost_extractor.validate_config({ max_stream_buffer_bytes = 0 })
+    assert.is_nil(ok)
+    assert.equals("max_stream_buffer_bytes must be > 0", err)
+
+    ok, err = cost_extractor.validate_config({ max_parse_time_ms = 0 })
+    assert.is_nil(ok)
+    assert.equals("max_parse_time_ms must be > 0", err)
+  end)
+
+  it("returns config_invalid when config is missing", function()
+    local result, err, meta = cost_extractor.extract_from_response("{}", nil)
+    assert.is_nil(result)
+    assert.equals("config_invalid", err)
+    assert.is_true(meta.fallback)
+  end)
+end)

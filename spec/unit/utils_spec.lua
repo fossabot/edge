@@ -486,3 +486,100 @@ describe("utils.get_json (chain)", function()
     assert.is_string(s)
   end)
 end)
+
+local function _reload_utils_with_stubs(stubs)
+  local saved_loaded = {}
+  local saved_preload = {}
+
+  for name, loader in pairs(stubs or {}) do
+    saved_loaded[name] = package.loaded[name]
+    saved_preload[name] = package.preload[name]
+    package.loaded[name] = nil
+    package.preload[name] = loader
+  end
+
+  local saved_utils = package.loaded["fairvisor.utils"]
+  package.loaded["fairvisor.utils"] = nil
+  local reloaded = require("fairvisor.utils")
+
+  package.loaded["fairvisor.utils"] = saved_utils
+  for name, _ in pairs(stubs or {}) do
+    package.loaded[name] = saved_loaded[name]
+    package.preload[name] = saved_preload[name]
+  end
+
+  return reloaded
+end
+
+describe("utils targeted reload coverage", function()
+  it("covers constant_time_equals bit path", function()
+    local reloaded = _reload_utils_with_stubs({
+      bit = function()
+        return {
+          bxor = function(a, b) return (a == b) and 0 or 1 end,
+          bor = function(a, b) return ((a ~= 0) or (b ~= 0)) and 1 or 0 end,
+        }
+      end,
+    })
+
+    assert.is_true(reloaded.constant_time_equals("same", "same"))
+    assert.is_false(reloaded.constant_time_equals("same", "diff"))
+  end)
+
+  it("covers cjson.safe JSON chain when available", function()
+    local reloaded = _reload_utils_with_stubs({
+      ["cjson.safe"] = function()
+        return {
+          decode = function(input)
+            if input == '{"a":1}' then
+              return { a = 1 }
+            end
+            return nil
+          end,
+          encode = function(tbl)
+            if tbl and tbl.a == 1 then
+              return '{"a":1}'
+            end
+            return nil
+          end,
+        }
+      end,
+    })
+
+    local jl = reloaded.get_json()
+    local decoded, decode_err = jl.decode('{"a":1}')
+    local encoded, encode_err = jl.encode({ a = 1 })
+    assert.is_nil(decode_err)
+    assert.equals(1, decoded.a)
+    assert.is_nil(encode_err)
+    assert.equals('{"a":1}', encoded)
+  end)
+
+  it("covers resty.sha256 fallback when ngx.sha256_bin is unavailable", function()
+    local saved_ngx = _G.ngx
+    local saved_utils = package.loaded["fairvisor.utils"]
+    local saved_prel = package.preload["resty.sha256"]
+    _G.ngx = nil
+    package.loaded["fairvisor.utils"] = nil
+    package.preload["resty.sha256"] = function()
+      return {
+        new = function()
+          return {
+            update = function() end,
+            final = function() return "digest" end,
+          }
+        end,
+      }
+    end
+    local reloaded = require("fairvisor.utils")
+
+    local digest, err = reloaded.sha256("payload")
+
+    package.loaded["fairvisor.utils"] = saved_utils
+    package.preload["resty.sha256"] = saved_prel
+    _G.ngx = saved_ngx
+
+    assert.is_nil(err)
+    assert.equals("digest", digest)
+  end)
+end)

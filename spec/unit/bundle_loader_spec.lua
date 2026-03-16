@@ -609,3 +609,166 @@ runner:then_("^the saas client received a bundle_activated event$", function(ctx
 end)
 
 runner:feature_file_relative("features/bundle_loader.feature")
+
+describe("bundle_loader targeted direct branch coverage", function()
+  local bundle_loader
+
+  before_each(function()
+    mock_ngx.setup_ngx()
+    bundle_loader = _reload_modules()
+  end)
+
+  it("returns top-level validation errors for invalid bundle shape", function()
+    local errors = bundle_loader.validate_bundle(nil)
+    assert.same({ "bundle must be a table" }, errors)
+  end)
+
+  it("rejects invalid policy, rule, fallback_limit, and unsupported algorithm", function()
+    local compiled, err = bundle_loader.load_from_string(
+      table.concat({
+        '{"bundle_version":1,"policies":[',
+        '{"id":"bad-rule","spec":{"selector":{"pathPrefix":"/a","methods":["GET"]},',
+        '"rules":[{"limit_keys":["jwt:sub"],"algorithm":"token_bucket",',
+        '"algorithm_config":{"tokens_per_second":1,"burst":1}}]}},',
+        '{"id":"bad-fallback","spec":{"selector":{"pathPrefix":"/b","methods":["GET"]},',
+        '"rules":[{"name":"ok","limit_keys":["jwt:sub"],"algorithm":"token_bucket",',
+        '"algorithm_config":{"tokens_per_second":1,"burst":1}}],"fallback_limit":"oops"}},',
+        '{"id":"bad-algo","spec":{"selector":{"pathPrefix":"/c","methods":["GET"]},',
+        '"rules":[{"name":"weird","limit_keys":["jwt:sub"],"algorithm":"weird",',
+        '"algorithm_config":{"burst":1}}]}}',
+        ']}',
+      })
+    )
+    assert.is_table(compiled)
+    assert.is_nil(err)
+    assert.equals(0, #compiled.policies)
+    assert.same({
+      "policy[1] rule[1]: missing name",
+      "policy=bad-fallback: fallback_limit must be a table",
+      "policy=bad-algo rule=weird invalid_algorithm_config: unsupported algorithm",
+    }, compiled.validation_errors)
+  end)
+
+  it("queues audit event for malformed signed bundle payload", function()
+    local events = {}
+    bundle_loader.init({
+      saas_client = {
+        queue_event = function(event)
+          events[#events + 1] = event
+        end,
+      },
+    })
+
+    local compiled, err = bundle_loader.load_from_string("not-a-signed-bundle", "signing-key")
+    assert.is_nil(compiled)
+    assert.equals("signed_bundle_format_error", err)
+    assert.equals("bundle_rejected", events[1].event_type)
+    assert.equals("signed_bundle_format_error", events[1].rejection_reason)
+  end)
+
+  it("returns file and apply guard errors", function()
+    local compiled, load_err = bundle_loader.load_from_file(nil)
+    assert.is_nil(compiled)
+    assert.equals("file_path_required", load_err)
+
+    local applied, apply_err = bundle_loader.apply(nil)
+    assert.is_nil(applied)
+    assert.equals("compiled_bundle_required", apply_err)
+  end)
+
+  it("fails hot reload init when timer registration fails", function()
+    ngx.timer = {
+      every = function()
+        return nil, "boom"
+      end,
+    }
+
+    local ok, err = bundle_loader.init_hot_reload(5, "/tmp/nope.json")
+    assert.is_nil(ok)
+    assert.equals("hot_reload_init_failed: boom", err)
+  end)
+
+  it("returns validation errors for top-level bundle edge cases", function()
+    assert.same({ "bundle_version must be a positive number" }, bundle_loader.validate_bundle({
+      bundle_version = 0,
+      policies = {},
+    }))
+
+    assert.same({ "policies must be a table" }, bundle_loader.validate_bundle({
+      bundle_version = 1,
+      policies = false,
+    }))
+  end)
+
+  it("returns policy validation errors for invalid selector and mode", function()
+    local errors = bundle_loader.validate_bundle({
+      bundle_version = 1,
+      policies = {
+        { id = "bad-selector", spec = {} },
+        { id = "bad-mode", spec = { selector = {}, mode = "bogus", rules = {} } },
+      },
+    })
+    assert.same({
+      "policy=bad-selector: missing selector",
+      "policy=bad-mode: invalid mode",
+    }, errors)
+  end)
+
+  it("returns policy validation error when policy id is missing", function()
+    local errors = bundle_loader.validate_bundle({
+      bundle_version = 1,
+      policies = {
+        { spec = { selector = {}, rules = {} } },
+      },
+    })
+
+    assert.same({
+      "policy[1]: missing id",
+    }, errors)
+  end)
+
+  it("rejects invalid top-level timestamps and malformed policies table", function()
+    assert.same({ "issued_at_invalid" }, bundle_loader.validate_bundle({
+      bundle_version = 1,
+      policies = {},
+      issued_at = "bad",
+    }))
+
+    assert.same({ "expires_at_invalid" }, bundle_loader.validate_bundle({
+      bundle_version = 1,
+      policies = {},
+      expires_at = "bad",
+    }))
+
+    assert.same({ "policy=bad-rules: rules must be a table" }, bundle_loader.validate_bundle({
+      bundle_version = 1,
+      policies = {
+        { id = "bad-rules", spec = { selector = {}, rules = false } },
+      },
+    }))
+  end)
+
+  it("returns json_string_required for empty payload", function()
+    local compiled, err = bundle_loader.load_from_string("")
+    assert.is_nil(compiled)
+    assert.equals("json_string_required", err)
+  end)
+
+  it("validates cost_based rules and normalizes selector hosts with ports", function()
+    local compiled, err = bundle_loader.load_from_string(
+      table.concat({
+        '{"bundle_version":2,"policies":[',
+        '{"id":"cost-policy","spec":{"selector":{',
+        '"pathPrefix":"/cost","methods":["POST"],"hosts":["Example.COM:443"]},',
+        '"rules":[{"name":"cost-rule","limit_keys":["jwt:sub"],',
+        '"algorithm":"cost_based","algorithm_config":{"budget":100,"period":"1h",',
+        '"staged_actions":[{"threshold_percent":100,"action":"reject"}]}}]}}',
+        ']}',
+      })
+    )
+
+    assert.is_nil(err)
+    assert.is_table(compiled)
+    assert.equals("example.com", compiled.policies[1].spec.selector.hosts[1])
+  end)
+end)

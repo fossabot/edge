@@ -183,3 +183,23 @@ runner:then_('^current and previous rate keys for limit key "([^"]+)" are cleare
 end)
 
 runner:feature_file_relative("features/circuit_breaker.feature")
+
+describe("circuit_breaker targeted direct coverage", function()
+  it("rejects invalid config shapes and fills defaults", function()
+    local ok, err = circuit_breaker.validate_config(nil)
+    assert.is_true(ok)
+    assert.is_nil(err)
+
+    ok, err = circuit_breaker.validate_config({ enabled = "yes" })
+    assert.is_nil(ok)
+    assert.equals("circuit_breaker.enabled must be a boolean", err)
+
+    local config = { enabled = true, spend_rate_threshold_per_minute = 10 }
+    ok, err = circuit_breaker.validate_config(config)
+    assert.is_true(ok)
+    assert.is_nil(err)
+    assert.equals("reject", config.action)
+    assert.equals(0, config.auto_reset_after_minutes)
+    assert.is_false(config.alert)
+  end)
+end)

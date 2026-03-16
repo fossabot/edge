@@ -368,3 +368,91 @@ runner:then_("^the period key at now ([%d%.]+) stores usage (%d+)$", function(ct
 end)
 
 runner:feature_file_relative("features/cost_budget.feature")
+
+describe("cost_budget targeted direct coverage", function()
+  it("rejects invalid now and budget inputs for compute_period_start", function()
+    local period_start, err = cost_budget.compute_period_start("minute", nil)
+    assert.is_nil(period_start)
+    assert.equals("now must be a number", err)
+
+    period_start, err = cost_budget.compute_period_start("bogus", 10)
+    assert.is_nil(period_start)
+    assert.equals("unknown period", err)
+  end)
+
+  it("fills config defaults and rejects invalid cost configuration", function()
+    local ok, err = cost_budget.validate_config({
+      algorithm = "cost_based",
+      budget = 100,
+      period = "1h",
+      cost_key = "bogus",
+    })
+    assert.is_nil(ok)
+    assert.equals("cost_key must be fixed, header:<name>, or query:<name>", err)
+
+    local config = {
+      algorithm = "cost_based",
+      budget = 100,
+      period = "1h",
+      staged_actions = {
+        { threshold_percent = 100, action = "reject" },
+      },
+    }
+    ok, err = cost_budget.validate_config(config)
+    assert.is_true(ok)
+    assert.is_nil(err)
+    assert.equals("fixed", config.cost_key)
+    assert.equals(1, config.default_cost)
+    assert.equals(1, config.fixed_cost)
+  end)
+
+  it("rejects invalid budget, default_cost, and staged_actions entries", function()
+    local ok, err = cost_budget.validate_config({
+      algorithm = "cost_based",
+      budget = 0,
+      period = "1h",
+      staged_actions = {
+        { threshold_percent = 100, action = "reject" },
+      },
+    })
+    assert.is_nil(ok)
+    assert.equals("budget must be a positive number", err)
+
+    ok, err = cost_budget.validate_config({
+      algorithm = "cost_based",
+      budget = 10,
+      period = "1h",
+      default_cost = 0,
+      staged_actions = {
+        { threshold_percent = 100, action = "reject" },
+      },
+    })
+    assert.is_nil(ok)
+    assert.equals("default_cost must be a positive number", err)
+
+    ok, err = cost_budget.validate_config({
+      algorithm = "cost_based",
+      budget = 10,
+      period = "1h",
+      staged_actions = { "bad" },
+    })
+    assert.is_nil(ok)
+    assert.equals("staged_action must be a table", err)
+  end)
+
+  it("falls back to default cost for invalid sources", function()
+    local cost = cost_budget.resolve_cost({
+      _cost_key_kind = "header",
+      _cost_key_name = "x-cost",
+      default_cost = 7,
+    }, { headers = {} })
+    assert.equals(7, cost)
+
+    cost = cost_budget.resolve_cost({
+      _cost_key_kind = "fixed",
+      default_cost = 9,
+      fixed_cost = 0,
+    }, {})
+    assert.equals(9, cost)
+  end)
+end)
