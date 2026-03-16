@@ -1,4 +1,12 @@
-if ngx.var.fairvisor_mode ~= "reverse_proxy" then
+local mode = ngx.var.fairvisor_mode
+
+if mode == "wrapper" then
+  local wrapper = require("fairvisor.wrapper")
+  wrapper.access_handler()
+  return
+end
+
+if mode ~= "reverse_proxy" then
   return
 end
 

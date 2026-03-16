@@ -11,6 +11,7 @@ env FAIRVISOR_SHARED_DICT_SIZE;
 env FAIRVISOR_LOG_LEVEL;
 env FAIRVISOR_MODE;
 env FAIRVISOR_BACKEND_URL;
+env FAIRVISOR_UPSTREAM_TIMEOUT_MS;
 env FAIRVISOR_DEBUG_SESSION_SECRET;
 
 events {
@@ -46,6 +47,7 @@ http {
     server_name _;
     set $fairvisor_mode "${FAIRVISOR_MODE}";
     set $fairvisor_backend "${FAIRVISOR_BACKEND_URL}";
+    set $wrapper_upstream_url "";
 
     location = /livez {
       default_type text/plain;
@@ -86,6 +88,16 @@ http {
 
       if ($fairvisor_mode = reverse_proxy) {
         proxy_pass $fairvisor_backend;
+        break;
+      }
+
+      proxy_ssl_server_name on;
+      proxy_ssl_protocols TLSv1.2 TLSv1.3;
+      proxy_read_timeout ${FAIRVISOR_UPSTREAM_TIMEOUT_MS}ms;
+      proxy_send_timeout ${FAIRVISOR_UPSTREAM_TIMEOUT_MS}ms;
+
+      if ($fairvisor_mode = wrapper) {
+        proxy_pass $wrapper_upstream_url;
         break;
       }
 

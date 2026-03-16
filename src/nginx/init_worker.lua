@@ -93,4 +93,18 @@ else
   if not da_ok then
     ngx.log(ngx.ERR, "fairvisor module=init_worker decision_api_init_failed err=", da_err)
   end
+
+  local wrapper_ok, wrapper = pcall(require, "fairvisor.wrapper")
+  if wrapper_ok then
+    local w_ok, w_err = wrapper.init({
+      health        = health,
+      rule_engine   = rule_engine,
+      bundle_loader = bundle_loader,
+    })
+    if not w_ok then
+      ngx.log(ngx.ERR, "fairvisor module=init_worker wrapper_init_failed err=", w_err)
+    end
+  else
+    ngx.log(ngx.ERR, "fairvisor module=init_worker wrapper_require_failed err=", wrapper)
+  end
 end
