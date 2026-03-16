@@ -6,7 +6,17 @@ if mode == "wrapper" then
   return
 end
 
-if mode ~= "reverse_proxy" then
+if mode == "hybrid" then
+  local wrapper = require("fairvisor.wrapper")
+  local provider = wrapper.get_provider(ngx.var.uri or "")
+  if provider then
+    wrapper.access_handler()
+    return
+  end
+  -- No provider match — fall through to decision_api enforcement
+end
+
+if mode ~= "reverse_proxy" and mode ~= "hybrid" then
   return
 end
 

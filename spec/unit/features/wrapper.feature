@@ -193,6 +193,19 @@ Feature: LLM Proxy Wrapper Mode unit behavior
       When access_handler is called
       Then response exit code is 429
 
+  Rule: hybrid mode routing decision
+    Scenario: hybrid mode — provider path triggers wrapper access_handler
+      Given the nginx mock is set up for access_handler
+      And request auth header is "Bearer eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyMTIzIn0.:sk-abc123"
+      And request path is "/openai/v1/chat/completions"
+      When access_handler is called
+      Then upstream url contains "api.openai.com"
+      And ngx exit was not called
+
+    Scenario: hybrid mode — get_provider returns nil for non-provider path
+      When I call get_provider for path "/api/v1/some-internal-endpoint"
+      Then provider is nil
+
   Rule: wrapper init
     Scenario: init with valid deps table returns true
       When I call wrapper init with valid deps

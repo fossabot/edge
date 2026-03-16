@@ -19,8 +19,9 @@ fi
 
 if [ "${FAIRVISOR_MODE:-decision_service}" != "decision_service" ] && \
    [ "${FAIRVISOR_MODE:-decision_service}" != "reverse_proxy" ] && \
-   [ "${FAIRVISOR_MODE:-decision_service}" != "wrapper" ]; then
-  echo "fairvisor: FAIRVISOR_MODE must be decision_service, reverse_proxy, or wrapper" >&2
+   [ "${FAIRVISOR_MODE:-decision_service}" != "wrapper" ] && \
+   [ "${FAIRVISOR_MODE:-decision_service}" != "hybrid" ]; then
+  echo "fairvisor: FAIRVISOR_MODE must be decision_service, reverse_proxy, wrapper, or hybrid" >&2
   exit 1
 fi
 
