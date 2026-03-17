@@ -1,0 +1,62 @@
+{
+  "bundle_version": 1,
+  "issued_at": "2026-01-01T00:00:00Z",
+  "expires_at": "2030-01-01T00:00:00Z",
+  "policies": [
+    {
+      "id": "provider-failover-primary",
+      "spec": {
+        "selector": {
+          "pathPrefix": "/openai/",
+          "methods": ["POST"]
+        },
+        "mode": "enforce",
+        "rules": [
+          {
+            "name": "openai-tpm",
+            "limit_keys": ["jwt:org_id"],
+            "algorithm": "token_bucket_llm",
+            "algorithm_config": {
+              "tokens_per_minute": 200000,
+              "burst_tokens": 200000,
+              "default_max_completion_tokens": 2048
+            }
+          },
+          {
+            "name": "openai-circuit-breaker",
+            "limit_keys": ["jwt:org_id"],
+            "algorithm": "circuit_breaker",
+            "algorithm_config": {
+              "spend_window_seconds": 300,
+              "spend_threshold": 100000,
+              "cooldown_seconds": 600
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "provider-failover-fallback",
+      "spec": {
+        "selector": {
+          "pathPrefix": "/anthropic/",
+          "methods": ["POST"]
+        },
+        "mode": "enforce",
+        "rules": [
+          {
+            "name": "anthropic-tpm",
+            "limit_keys": ["jwt:org_id"],
+            "algorithm": "token_bucket_llm",
+            "algorithm_config": {
+              "tokens_per_minute": 100000,
+              "burst_tokens": 100000,
+              "default_max_completion_tokens": 2048
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "kill_switches": []
+}
