@@ -1,0 +1,13 @@
+{
+  "_comment": "429 body returned when the request exceeds max_prompt_tokens.",
+  "_headers": {
+    "X-Fairvisor-Reason": "prompt_too_large",
+    "Content-Type": "application/json"
+  },
+  "error": {
+    "type": "rate_limit_error",
+    "code": "prompt_too_large",
+    "message": "Request prompt exceeds the maximum allowed token count for this policy.",
+    "param": null
+  }
+}
