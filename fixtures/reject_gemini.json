@@ -1,0 +1,13 @@
+{
+  "_comment": "Gemini-native 429 reject body. Used for /gemini/* paths.",
+  "_headers": {
+    "X-Fairvisor-Reason": "tpm_exceeded",
+    "Retry-After": "60",
+    "Content-Type": "application/json"
+  },
+  "error": {
+    "code": 429,
+    "message": "Token budget exceeded for this tenant.",
+    "status": "RESOURCE_EXHAUSTED"
+  }
+}
