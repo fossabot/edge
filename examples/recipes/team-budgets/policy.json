@@ -1,0 +1,47 @@
+{
+  "bundle_version": 1,
+  "issued_at": "2026-01-01T00:00:00Z",
+  "expires_at": "2030-01-01T00:00:00Z",
+  "policies": [
+    {
+      "id": "team-token-budget",
+      "spec": {
+        "selector": {
+          "pathPrefix": "/openai/",
+          "methods": ["POST"]
+        },
+        "mode": "enforce",
+        "rules": [
+          {
+            "name": "per-team-tpm",
+            "limit_keys": ["jwt:team_id"],
+            "algorithm": "token_bucket_llm",
+            "algorithm_config": {
+              "tokens_per_minute": 120000,
+              "tokens_per_day": 2000000,
+              "burst_tokens": 120000,
+              "default_max_completion_tokens": 1024
+            }
+          },
+          {
+            "name": "per-team-cost-budget",
+            "limit_keys": ["jwt:team_id"],
+            "algorithm": "cost_based",
+            "algorithm_config": {
+              "budget": 50000,
+              "period": "30d",
+              "cost_key": "fixed",
+              "fixed_cost": 1,
+              "staged_actions": [
+                { "threshold_percent": 80, "action": "warn" },
+                { "threshold_percent": 95, "action": "throttle", "delay_ms": 500 },
+                { "threshold_percent": 100, "action": "reject" }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "kill_switches": []
+}
