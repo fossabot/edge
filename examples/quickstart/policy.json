@@ -1,0 +1,31 @@
+{
+  "bundle_version": 1,
+  "issued_at": "2026-01-01T00:00:00Z",
+  "expires_at": "2030-01-01T00:00:00Z",
+  "policies": [
+    {
+      "id": "quickstart-tpm-policy",
+      "spec": {
+        "selector": {
+          "pathPrefix": "/openai/",
+          "methods": ["POST"]
+        },
+        "mode": "enforce",
+        "rules": [
+          {
+            "name": "tpm-limit",
+            "limit_keys": ["jwt:sub"],
+            "algorithm": "token_bucket_llm",
+            "algorithm_config": {
+              "tokens_per_minute": 100,
+              "tokens_per_day": 1000,
+              "burst_tokens": 100,
+              "default_max_completion_tokens": 50
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "kill_switches": []
+}
