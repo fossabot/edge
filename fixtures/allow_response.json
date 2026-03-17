@@ -1,0 +1,28 @@
+{
+  "_comment": "Sample 200 response for an allowed request in wrapper mode. Note: no Authorization, x-api-key, or x-goog-api-key headers — upstream auth is stripped on the response side.",
+  "_status": 200,
+  "_headers": {
+    "Content-Type": "application/json",
+    "X-Fairvisor-Reason": null,
+    "Authorization": null,
+    "x-api-key": null,
+    "x-goog-api-key": null
+  },
+  "id": "chatcmpl-example",
+  "object": "chat.completion",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Hello! How can I help you today?"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 9,
+    "total_tokens": 19
+  }
+}
