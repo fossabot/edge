@@ -1,0 +1,40 @@
+{
+  "bundle_version": 1,
+  "issued_at": "2026-01-01T00:00:00Z",
+  "expires_at": "2030-01-01T00:00:00Z",
+  "policies": [
+    {
+      "id": "runaway-agent-guard",
+      "spec": {
+        "selector": {
+          "pathPrefix": "/",
+          "methods": ["POST"]
+        },
+        "mode": "enforce",
+        "rules": [
+          {
+            "name": "loop-detection",
+            "limit_keys": ["jwt:agent_id"],
+            "algorithm": "loop_detector",
+            "algorithm_config": {
+              "window_seconds": 60,
+              "max_requests": 30,
+              "cooldown_seconds": 120
+            }
+          },
+          {
+            "name": "agent-tpm-guard",
+            "limit_keys": ["jwt:agent_id"],
+            "algorithm": "token_bucket_llm",
+            "algorithm_config": {
+              "tokens_per_minute": 50000,
+              "burst_tokens": 50000,
+              "default_max_completion_tokens": 512
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "kill_switches": []
+}
