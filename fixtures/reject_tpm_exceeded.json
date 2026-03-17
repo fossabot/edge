@@ -1,0 +1,17 @@
+{
+  "_comment": "429 body returned when the per-minute token budget is exhausted.",
+  "_headers": {
+    "X-Fairvisor-Reason": "tpm_exceeded",
+    "Retry-After": "60",
+    "RateLimit-Limit": "120000",
+    "RateLimit-Remaining": "0",
+    "RateLimit-Reset": "<unix timestamp of next window>",
+    "Content-Type": "application/json"
+  },
+  "error": {
+    "type": "rate_limit_error",
+    "code": "tpm_exceeded",
+    "message": "Token budget exceeded for this tenant.",
+    "param": null
+  }
+}
