@@ -1,0 +1,16 @@
+{
+  "_comment": "429 body returned when the per-day token budget is exhausted.",
+  "_headers": {
+    "X-Fairvisor-Reason": "tpd_exceeded",
+    "Retry-After": "86400",
+    "RateLimit-Limit": "2000000",
+    "RateLimit-Remaining": "0",
+    "Content-Type": "application/json"
+  },
+  "error": {
+    "type": "rate_limit_error",
+    "code": "tpd_exceeded",
+    "message": "Token budget exceeded for this tenant.",
+    "param": null
+  }
+}
