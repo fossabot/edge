@@ -92,6 +92,12 @@ Fairvisor integrates *alongside* Kong, nginx, and Envoy — it is not a replacem
 
 ## Quick start
 
+> **Runnable quickstart:** `examples/quickstart/` — `docker compose up -d` and run your first enforce/reject test in under a minute. See [`examples/quickstart/README.md`](examples/quickstart/README.md).
+>
+> **Recipes:** `examples/recipes/` — deployable team budgets, runaway agent guard, and provider failover examples.
+>
+> **Sample artifacts:** `fixtures/` — canonical request/response fixtures for enforce, reject (TPM, TPD, prompt-too-large), and provider-native error bodies (OpenAI, Anthropic, Gemini).
+
 ### 1. Create a policy
 
 ```bash
@@ -304,7 +310,7 @@ Policies are versioned JSON — commit them to Git, review changes in PRs, roll 
 
 **No external datastore.** All enforcement state lives in in-process shared memory (`ngx.shared.dict`). No Redis, no Postgres, no network round-trips in the decision path.
 
-> Reproduce: `git clone https://github.com/fairvisor/benchmark && cd benchmark && ./run-all.sh`
+> Reproduce: see [fairvisor/benchmark](https://github.com/fairvisor/benchmark) — the canonical benchmark source of truth for Fairvisor Edge performance numbers.
 
 ## Deployment
 
@@ -348,14 +354,16 @@ If the SaaS is unreachable, the edge keeps enforcing with the last-known policy 
 ## Project layout
 
 ```
-src/fairvisor/    runtime modules (OpenResty/LuaJIT)
-cli/              command-line tooling
-spec/             unit and integration tests (busted)
-tests/e2e/        Docker-based E2E tests (pytest)
-examples/         sample policy bundles
-helm/             Helm chart
-docker/           Docker artifacts
-docs/             reference documentation
+src/fairvisor/           runtime modules (OpenResty/LuaJIT)
+cli/                     command-line tooling
+spec/                    unit and integration tests (busted)
+tests/e2e/               Docker-based E2E tests (pytest)
+examples/quickstart/     runnable quickstart (docker compose up -d)
+examples/recipes/        deployable policy recipes (team budgets, agent guard, failover)
+fixtures/                canonical request/response sample artifacts
+helm/                    Helm chart
+docker/                  Docker artifacts
+docs/                    reference documentation
 ```
 
 ## Contributing
@@ -376,3 +384,4 @@ pytest tests/e2e -v  # E2E (requires Docker)
 ---
 
 **Docs:** [docs.fairvisor.com](https://docs.fairvisor.com/docs/) · **Website:** [fairvisor.com](https://fairvisor.com) · **Quickstart:** [5 minutes to enforcement](https://docs.fairvisor.com/docs/quickstart/)
+
