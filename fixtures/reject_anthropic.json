@@ -1,0 +1,13 @@
+{
+  "_comment": "Anthropic-native 429 reject body. Used for /anthropic/* paths.",
+  "_headers": {
+    "X-Fairvisor-Reason": "tpm_exceeded",
+    "Retry-After": "60",
+    "Content-Type": "application/json"
+  },
+  "type": "error",
+  "error": {
+    "type": "rate_limit_error",
+    "message": "Token budget exceeded for this tenant."
+  }
+}
