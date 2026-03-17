@@ -1,0 +1,14 @@
+{
+  "_comment": "OpenAI-native 429 reject body. Used for /openai/* paths and OpenAI-compatible providers.",
+  "_headers": {
+    "X-Fairvisor-Reason": "tpm_exceeded",
+    "Retry-After": "60",
+    "Content-Type": "application/json"
+  },
+  "error": {
+    "type": "rate_limit_error",
+    "code": "tpm_exceeded",
+    "message": "Token budget exceeded for this tenant.",
+    "param": null
+  }
+}
