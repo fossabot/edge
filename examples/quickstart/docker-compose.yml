@@ -1,0 +1,48 @@
+# Fairvisor Edge — Quickstart stack (standalone mode)
+#
+# Usage:
+#   docker compose up -d
+#   curl -s http://localhost:8080/readyz          # health check
+#   curl -s -X POST http://localhost:8080/openai/v1/chat/completions \
+#     -H "Authorization: Bearer demo-client-jwt.demo-payload.demo-sig:sk-fake-upstream-key" \
+#     -H "Content-Type: application/json" \
+#     -d @fixtures/normal_request.json            # expect 200
+#   curl -s -X POST http://localhost:8080/openai/v1/chat/completions \
+#     -H "Authorization: Bearer demo-client-jwt.demo-payload.demo-sig:sk-fake-upstream-key" \
+#     -H "Content-Type: application/json" \
+#     -d @fixtures/over_limit_request.json        # expect 429
+#
+# This file is also the base for the e2e-smoke CI check.
+# CI extends it via tests/e2e/docker-compose.test.yml; do not diverge the
+# service name, port, or volume contract without updating CI as well.
+
+services:
+  edge:
+    image: ghcr.io/fairvisor/fairvisor-edge:latest
+    ports:
+      - "8080:8080"
+    environment:
+      FAIRVISOR_CONFIG_FILE: /etc/fairvisor/policy.json
+      FAIRVISOR_MODE: wrapper
+      FAIRVISOR_SHARED_DICT_SIZE: 32m
+      FAIRVISOR_LOG_LEVEL: info
+      FAIRVISOR_WORKER_PROCESSES: "1"
+    volumes:
+      - ./policy.json:/etc/fairvisor/policy.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 5s
+
+  mock_llm:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./mock-llm.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:80/"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
