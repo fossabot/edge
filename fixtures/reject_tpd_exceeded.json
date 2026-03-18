@@ -1,9 +1,9 @@
 {
-  "_comment": "429 body returned when the per-day token budget is exhausted.",
+  "_comment": "Illustrative 429 body returned when the per-day token budget is exhausted. RateLimit-Limit reflects the policy's tokens_per_day value.",
   "_headers": {
     "X-Fairvisor-Reason": "tpd_exceeded",
-    "Retry-After": "86400",
-    "RateLimit-Limit": "2000000",
+    "Retry-After": "<seconds until midnight UTC>",
+    "RateLimit-Limit": "<tokens_per_day from policy>",
     "RateLimit-Remaining": "0",
     "Content-Type": "application/json"
   },
