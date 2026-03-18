@@ -19,20 +19,17 @@
             "algorithm_config": {
               "tokens_per_minute": 200000,
               "burst_tokens": 200000,
-              "default_max_completion_tokens": 2048
-            }
-          },
-          {
-            "name": "openai-circuit-breaker",
-            "limit_keys": ["jwt:org_id"],
-            "algorithm": "circuit_breaker",
-            "algorithm_config": {
-              "spend_window_seconds": 300,
-              "spend_threshold": 100000,
-              "cooldown_seconds": 600
+              "default_max_completion": 2048
             }
           }
-        ]
+        ],
+        "circuit_breaker": {
+          "enabled": true,
+          "spend_rate_threshold_per_minute": 10000,
+          "action": "reject",
+          "alert": true,
+          "auto_reset_after_minutes": 10
+        }
       }
     },
     {
@@ -51,7 +48,7 @@
             "algorithm_config": {
               "tokens_per_minute": 100000,
               "burst_tokens": 100000,
-              "default_max_completion_tokens": 2048
+              "default_max_completion": 2048
             }
           }
         ]
