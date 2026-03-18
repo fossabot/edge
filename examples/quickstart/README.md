@@ -22,66 +22,77 @@ docker compose ps
 
 ## Verify enforcement
 
+This quickstart runs in `FAIRVISOR_MODE=reverse_proxy`. Requests to `/v1/*`
+are enforced by the TPM policy and forwarded to a local mock LLM backend.
+No real API keys are required.
+
 **Allowed request** — should return `200`:
 
 ```bash
-curl -s -X POST http://localhost:8080/openai/v1/chat/completions \
-  -H "Authorization: Bearer demo-client-jwt.demo-payload.demo-sig:sk-fake-key" \
+curl -s -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d @../../fixtures/normal_request.json
 ```
 
-Expected response matches `../../fixtures/allow_response.json`.
+Expected response body shape matches `../../fixtures/allow_response.json`.
 
 **Over-limit request** — should return `429`:
 
 ```bash
-curl -s -X POST http://localhost:8080/openai/v1/chat/completions \
-  -H "Authorization: Bearer demo-client-jwt.demo-payload.demo-sig:sk-fake-key" \
+curl -s -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d @../../fixtures/over_limit_request.json
 ```
 
-Expected response body matches `../../fixtures/reject_tpm_exceeded.json`.
+Expected response body shape: `../../fixtures/reject_tpm_exceeded.json`.
 The response will also include:
 - `X-Fairvisor-Reason: tpm_exceeded`
 - `Retry-After: 60`
-- `RateLimit-Limit: 100`
+- `RateLimit-Limit: 100` (matches the quickstart policy `tokens_per_minute`)
 - `RateLimit-Remaining: 0`
 
-## Wrapper mode and auth
+## How the policy works
 
-This quickstart runs in `FAIRVISOR_MODE=wrapper`. The composite Bearer token format is:
+The quickstart policy (`policy.json`) enforces a TPM limit keyed on `ip:address`:
+
+- `tokens_per_minute: 100` — allows roughly 2 small requests per minute
+- `tokens_per_day: 1000` — daily cap
+- `default_max_completion: 50` — pessimistic reservation per request when `max_tokens` is not set
+
+Sending `over_limit_request.json` (which sets `max_tokens: 200000`) immediately
+exceeds the 100-token per-minute budget and triggers a `429`.
+
+## Wrapper mode (real provider routing)
+
+Wrapper mode routes requests to real upstream providers using provider-prefixed paths
+and a composite Bearer token. It requires real provider API keys and cannot be
+demonstrated with this mock stack.
+
+**Path and auth format:**
 
 ```
+POST /openai/v1/chat/completions
 Authorization: Bearer CLIENT_JWT:UPSTREAM_KEY
 ```
 
-- `CLIENT_JWT` — a signed JWT identifying the calling client/tenant (used for policy enforcement)
-- `UPSTREAM_KEY` — the real upstream API key forwarded to the provider (e.g. `sk-...` for OpenAI)
+Where:
+- `CLIENT_JWT` — signed JWT identifying the calling client/tenant (used for policy enforcement)
+- `UPSTREAM_KEY` — real upstream API key forwarded to the provider (e.g. `sk-...` for OpenAI)
 
-Fairvisor strips the composite header and injects the correct provider auth before forwarding. The upstream key is **never returned to the caller** — see `../../fixtures/allow_response.json` for proof (no `Authorization`, `x-api-key`, or `x-goog-api-key` headers in the response).
+Fairvisor strips the composite header, injects the correct provider auth before forwarding,
+and **never returns upstream auth headers to the caller**
+(see `../../fixtures/allow_response.json`).
 
-## Provider-prefixed paths
+**Provider-prefixed paths:**
 
-Wrapper mode routes by path prefix:
-
-| Path prefix | Upstream | Auth header |
+| Path prefix | Upstream | Auth header injected |
 |---|---|---|
 | `/openai/v1/...` | `https://api.openai.com/v1/...` | `Authorization: Bearer UPSTREAM_KEY` |
 | `/anthropic/v1/...` | `https://api.anthropic.com/v1/...` | `x-api-key: UPSTREAM_KEY` |
 | `/gemini/v1beta/...` | `https://generativelanguage.googleapis.com/v1beta/...` | `x-goog-api-key: UPSTREAM_KEY` |
 
-## Anthropic example
-
-```bash
-curl -s -X POST http://localhost:8080/anthropic/v1/messages \
-  -H "Authorization: Bearer demo-client-jwt.demo-payload.demo-sig:sk-ant-fake-key" \
-  -H "Content-Type: application/json" \
-  -d @../../fixtures/anthropic_normal_request.json
-```
-
-A rejected Anthropic request returns an Anthropic-native error body — see `../../fixtures/reject_anthropic.json`.
+To run in wrapper mode, change the compose env to `FAIRVISOR_MODE: wrapper` and
+supply real credentials in the `Authorization` header.
 
 ## Teardown
 
