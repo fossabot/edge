@@ -20,7 +20,7 @@
               "tokens_per_minute": 120000,
               "tokens_per_day": 2000000,
               "burst_tokens": 120000,
-              "default_max_completion_tokens": 1024
+              "default_max_completion": 1024
             }
           },
           {
