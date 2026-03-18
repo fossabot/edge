@@ -7,20 +7,20 @@
       "id": "quickstart-tpm-policy",
       "spec": {
         "selector": {
-          "pathPrefix": "/openai/",
+          "pathPrefix": "/v1/",
           "methods": ["POST"]
         },
         "mode": "enforce",
         "rules": [
           {
             "name": "tpm-limit",
-            "limit_keys": ["jwt:sub"],
+            "limit_keys": ["ip:address"],
             "algorithm": "token_bucket_llm",
             "algorithm_config": {
               "tokens_per_minute": 100,
               "tokens_per_day": 1000,
               "burst_tokens": 100,
-              "default_max_completion_tokens": 50
+              "default_max_completion": 50
             }
           }
         ]
