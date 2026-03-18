@@ -1,16 +1,22 @@
-# Fairvisor Edge — Quickstart stack (standalone mode)
+# Fairvisor Edge — Quickstart stack (standalone + reverse proxy mode)
 #
 # Usage:
 #   docker compose up -d
-#   curl -s http://localhost:8080/readyz          # health check
-#   curl -s -X POST http://localhost:8080/openai/v1/chat/completions \
-#     -H "Authorization: Bearer demo-client-jwt.demo-payload.demo-sig:sk-fake-upstream-key" \
+#   curl -s http://localhost:8080/readyz                          # health check
+#   curl -s -X POST http://localhost:8080/v1/chat/completions \
 #     -H "Content-Type: application/json" \
-#     -d @fixtures/normal_request.json            # expect 200
-#   curl -s -X POST http://localhost:8080/openai/v1/chat/completions \
-#     -H "Authorization: Bearer demo-client-jwt.demo-payload.demo-sig:sk-fake-upstream-key" \
+#     -d @../../fixtures/normal_request.json                      # expect 200
+#   curl -s -X POST http://localhost:8080/v1/chat/completions \
 #     -H "Content-Type: application/json" \
-#     -d @fixtures/over_limit_request.json        # expect 429
+#     -d @../../fixtures/over_limit_request.json                  # expect 429
+#
+# This stack runs in FAIRVISOR_MODE=reverse_proxy — requests to /v1/* are
+# enforced by policy then forwarded to the local mock LLM backend.
+# No real API keys required.
+#
+# Wrapper mode (routing by provider prefix, real upstream keys) is documented
+# in README.md under "Wrapper mode". It requires real provider credentials and
+# cannot be demonstrated with this mock stack.
 #
 # This file is also the base for the e2e-smoke CI check.
 # CI extends it via tests/e2e/docker-compose.test.yml; do not diverge the
@@ -23,12 +29,16 @@ services:
       - "8080:8080"
     environment:
       FAIRVISOR_CONFIG_FILE: /etc/fairvisor/policy.json
-      FAIRVISOR_MODE: wrapper
+      FAIRVISOR_MODE: reverse_proxy
+      FAIRVISOR_BACKEND_URL: http://mock_llm:80
       FAIRVISOR_SHARED_DICT_SIZE: 32m
       FAIRVISOR_LOG_LEVEL: info
       FAIRVISOR_WORKER_PROCESSES: "1"
     volumes:
       - ./policy.json:/etc/fairvisor/policy.json:ro
+    depends_on:
+      mock_llm:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/readyz"]
       interval: 2s
