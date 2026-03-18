@@ -17,6 +17,7 @@
 <p align="center">
   <a href="https://github.com/fairvisor/edge/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MPL--2.0-blue" alt="License: MPL-2.0"></a>
   <a href="https://github.com/fairvisor/edge/releases"><img src="https://img.shields.io/github/v/release/fairvisor/edge" alt="Latest release"></a>
+<a href="https://app.fossa.com/projects/git%2Bgithub.com%2Ffairvisor%2Fedge?ref=badge_shield" alt="FOSSA Status"><img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2Ffairvisor%2Fedge.svg?type=shield"/></a>
   <a href="https://github.com/fairvisor/-edge/actions"><img src="https://img.shields.io/github/actions/workflow/status/fairvisor/edge/ci.yml?label=CI" alt="CI"></a>
   <a href="https://fairvisor.github.io/edge/"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Ffairvisor.github.io%2Fedge%2Fcoverage-badge.json" alt="Lua coverage"></a>
   <a href="https://github.com/fairvisor/edge/pkgs/container/fairvisor-edge"><img src="https://img.shields.io/badge/ghcr.io-fairvisor--edge-blue?logo=docker" alt="GHCR image"></a>
@@ -29,6 +30,9 @@
 </p>
 
 ---
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Ffairvisor%2Fedge.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Ffairvisor%2Fedge?ref=badge_large)
 
 ## Table of Contents
 
