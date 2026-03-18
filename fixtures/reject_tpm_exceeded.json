@@ -1,9 +1,9 @@
 {
-  "_comment": "429 body returned when the per-minute token budget is exhausted.",
+  "_comment": "Illustrative 429 body returned when the per-minute token budget is exhausted. RateLimit-Limit reflects the policy's tokens_per_minute value.",
   "_headers": {
     "X-Fairvisor-Reason": "tpm_exceeded",
     "Retry-After": "60",
-    "RateLimit-Limit": "120000",
+    "RateLimit-Limit": "<tokens_per_minute from policy>",
     "RateLimit-Remaining": "0",
     "RateLimit-Reset": "<unix timestamp of next window>",
     "Content-Type": "application/json"
